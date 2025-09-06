@@ -19,17 +19,15 @@ for i in range(N):
     elif i == N - 1:  # Right boundary condition (e.g., Dirichlet)
         dudt.append(0.0)  # Assume u[N-1] is fixed
     else:  # Interior points
-        dudt.append(alpha * (u[i+1] - 2*u[i] + u[i-1]) / (dx**2))
+        dudt.append(alpha * (u[i+1] - 2 * u[i] + u[i-1]) / (dx ** 2))
 
 # Create a CasADi function for the ODE system
 f = cas.Function('f', [u], [cas.vertcat(*dudt)])
 
 # Set up the integrator
 ode = {'x': u, 'ode': f(u)}
-opts = {}
-t0 = 0.0
-tf = 1.0
-F = cas.integrator('F', 'cvodes', ode, t0, tf, opts)
+opts = {'tf': 1.0}
+F = cas.integrator('F', 'cvodes', ode, opts)
 
 # Initial condition - using numpy array for consistency
 u0 = np.array([np.sin(np.pi * i * dx) for i in range(N)])
@@ -44,7 +42,11 @@ u_final = sol['xf']
 
 print("Integration completed!")
 print(f"Final solution shape: {np.array(u_final).shape}")
-print(f"Final solution range: [{float(cas.mmin(u_final)):.6f}, {float(cas.mmax(u_final)):.6f}]")
+print(
+    f"Final solution range: "
+    f"[{float(cas.mmin(u_final)):.6f}, "
+    f"{float(cas.mmax(u_final)):.6f}]"
+)
 
 # Convert to numpy for plotting
 u0_np = np.array(u0)
@@ -66,8 +68,20 @@ plt.grid(True)
 
 # Plot 2: Log scale to see decay
 plt.subplot(2, 2, 2)
-plt.semilogy(x_grid, np.abs(u0_np) + 1e-12, 'b-', linewidth=2, label='Initial')
-plt.semilogy(x_grid, np.abs(u_final_np) + 1e-12, 'r-', linewidth=2, label='Final')
+plt.semilogy(
+    x_grid,
+    np.abs(u0_np) + 1e-12,
+    'b-',
+    linewidth=2,
+    label='Initial'
+)
+plt.semilogy(
+    x_grid,
+    np.abs(u_final_np) + 1e-12,
+    'r-',
+    linewidth=2,
+    label='Final'
+)
 plt.xlabel('Position x')
 plt.ylabel('|Temperature| (log scale)')
 plt.title('Temperature Decay (Log Scale)')
@@ -87,7 +101,7 @@ for t in time_points:
         F_t = cas.integrator('F_t', 'cvodes', ode, opts_t)
         sol_t = F_t(x0=u0)
         u_t = np.array(sol_t['xf']).flatten()
-    
+
     plt.plot(x_grid, u_t, linewidth=2, label=f't={t}')
 
 plt.xlabel('Position x')
@@ -109,9 +123,9 @@ for t in np.linspace(0, 1, 21):
         F_t = cas.integrator('F_t', 'cvodes', ode, 0.0, t, {})
         sol_t = F_t(x0=u0)
         u_t = np.array(sol_t['xf']).flatten()
-    
+
     # Calculate total energy (integral of u^2)
-    energy = np.trapz(u_t**2, x_grid)
+    energy = np.trapezoid(u_t**2, x_grid)
     energy_times.append(t)
     total_energies.append(energy)
 
