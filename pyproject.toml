@@ -11,8 +11,14 @@ dependencies = [
     "casadi",
     "pyomo",
     "numpy",
+    "scipy",
+    "sympy",
     "matplotlib",
     "pandas",
+    "tqdm",
+    "pyyaml",
+    "ipykernel",
+    "ipython"
 ]
 
 [build-system]
