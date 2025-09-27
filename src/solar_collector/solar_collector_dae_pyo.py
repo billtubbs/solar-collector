@@ -64,7 +64,7 @@ def create_pipe_flow_model(
         Function for time-varying fluid velocity v(t) [m/s]
         If None, uses default constant velocity
     heat_func : callable, optional
-        Function for time-varying volumetric heat input q(t) [W/m³]
+        Function for time-varying heat flux input q(t) [W/m²]
         If None, uses default zero heat input
     inlet_func : callable, optional
         Function for time-varying inlet temperature T_inlet(t) [K]
@@ -134,9 +134,10 @@ def create_pipe_flow_model(
 
     if heat_func is None:
         def heat_func(t):
+            # Heat flux to pipe wall [W/m²]
             if t > 60.0 and t <= 240.0:
-                return 1e6  # heat input [W/m³]
-            return 0.0  # heat input [W/m³]
+                return 40e3
+            return 0.0
 
     if inlet_func is None:
         def inlet_func(t):
@@ -169,8 +170,19 @@ def add_pde_constraints(model):
         if x == 0:  # Only skip inlet, NOT outlet
             return Constraint.Skip
 
+        # Density * specific heat for fluid
+        rho_cp = m.rho * m.cp
+
         # For nominal physical pipe (0 < x <= L): heat input/loss
         if x <= m.L:
+            # Convert heat flux [W/m²] to volumetric heat input [W/m³]
+            # Heat flux q(t) [W/m²] applied to outer surface
+            # Heat input per unit length: q(t) * π * D [W/m]
+            # Fluid volume per unit length: π * D² / 4 [m³/m]
+            # Heat input per unit volume: q(t) * π * D / (π * D² / 4) [W/m³]
+            # Simplified: q(t) * 4 / D [W/m³]
+            heat_input_volumetric = m.q[t] * 4.0 / m.D
+
             # Heat loss per unit length:
             #   h * π * D * (T - T_ambient) [W/m]
             # Heat loss per unit volume:
@@ -178,13 +190,12 @@ def add_pde_constraints(model):
             # Simplified:
             #   h * 4 * (T - T_ambient) / D [W/m³]
             heat_loss_volumetric = m.h * 4.0 * (m.T[t, x] - m.T_ambient) / m.D
-            
-            # PDE: ∂T/∂t + v(t)∂T/∂x = α∂²T/∂x² + q(t)/(ρcp) - q_loss/(ρcp)
-            return (
-                m.dTdt[t, x] + m.v[t] * m.dTdx[t, x] == (
-                    m.alpha * m.d2Tdx2[t, x] + m.q[t] / (m.rho * m.cp)
-                    - heat_loss_volumetric / (m.rho * m.cp)
-                )
+
+            # PDE: ρcp∂T/∂t + ρcpv(t) ∂T/∂x = ρcpα∂²T/∂x² + q_input - q_loss
+            return rho_cp * m.dTdt[t, x] + rho_cp * m.v[t] * m.dTdx[t, x] == (
+                rho_cp * m.alpha * m.d2Tdx2[t, x]
+                + heat_input_volumetric
+                - heat_loss_volumetric
             )
         else:
             # For extended section (L < x < L_extended): No heat input and no
@@ -308,30 +319,43 @@ def solve_model(
 
     return results
 
-def plot_results(model, t_eval, x_eval, figsize=(12, 8)):
+
+def plot_results(
+    model, t_eval, x_eval, name="Oil Temp Model", figsize=(8, 7.5)
+):
     """
-    Plot the temperature field solution with visualization of solar collector section
+    Plot the temperature field solution with input functions visualization
 
     Parameters:
     -----------
     model : pyomo.ConcreteModel
         Solved Pyomo model containing temperature solution
-    figsize : tuple, default=(12, 8)
-        Figure size as (width, height) in inches
+    t_eval : array-like
+        Times to evaluate (used for compatibility, not actively used)
+    x_eval : array-like
+        Positions to evaluate (used for compatibility, not actively used)
+    figsize : tuple, default=(12, 6)
+        Figure size as (width, height) in inches (not used in current layout)
 
     Returns:
     --------
-    fig : matplotlib.figure.Figure
-        Figure object containing the 4-subplot temperature visualization
-        
+    fig1 : matplotlib.figure.Figure
+        Figure with 4 time series plots (velocity, heat input, inlet temp,
+        outlet temp).
+    fig2 : matplotlib.figure.Figure
+        Figure with contour plot of temperature field (time vs position)
+
     Notes:
     ------
-    - Subplot 1: 3D surface plot of temperature field
-    - Subplot 2: 2D contour plot with time evolution
-    - Subplot 3: Temperature profiles at different times
-    - Subplot 4: Temperature evolution at different positions
+    Figure 1 (4x1 layout):
+    - Row 1: Fluid velocity over time
+    - Row 2: Solar heat input over time
+    - Row 3: Inlet temperature over time
+    - Row 4: Outlet temperature (at collector end) over time
+
+    Figure 2:
+    - Contour plot with time on x-axis and position on y-axis
     - Red dashed line marks end of solar collector section (x = L)
-    - Extension section (L < x <= L_extended) shown for boundary treatment
     """
     t_eval = np.array(t_eval).reshape(-1)
     x_eval = np.array(x_eval).reshape(-1)
@@ -348,66 +372,74 @@ def plot_results(model, t_eval, x_eval, figsize=(12, 8)):
         [pyo.environ.value(model.T[t, x]) for x in x_vals] for t in t_vals
     ])
 
-    # Create subplots
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=figsize)
+    # Extract input parameter values
+    v_vals = [pyo.environ.value(model.v[t]) for t in t_vals]
+    q_vals = [pyo.environ.value(model.q[t]) for t in t_vals]
+    T_inlet_vals = [pyo.environ.value(model.T_inlet[t]) for t in t_vals]
 
-    # 1. 3D surface plot
-    ax1.remove()
-    ax1 = fig.add_subplot(2, 2, 1, projection='3d')
-    surf = ax1.plot_surface(X_grid, T_grid, temp_vals - ZERO_C, cmap='viridis', alpha=0.8)
-    ax1.set_xlabel('Position x [m]')
-    ax1.set_ylabel('Time t [s]')
-    ax1.set_zlabel('Temperature T [°C]')
-    ax1.set_title('Temperature Field T(x,t)')
-    # Mark the boundary between physical and extended domain
-    ax1.axvline(x=model.L, color='red', linestyle='--', alpha=0.7)
+    # Find index closest to collector end (x = L) for outlet temperature
+    end_idx = np.argmin(np.abs(np.array(x_vals) - model.L))
+    outlet_temps = temp_vals[:, end_idx] - ZERO_C
 
-    # 2. Contour plot
-    contour = ax2.contourf(X_grid, T_grid, temp_vals - ZERO_C, levels=20, cmap='viridis')
-    ax2.set_xlabel('Position x [m]')
-    ax2.set_ylabel('Time t [s]')
-    ax2.set_title('Temperature Contours')
-    # Mark the boundary between physical and extended domain
-    ax2.axvline(x=model.L, color='red', linestyle='--', alpha=0.7, 
-                label=f'end (x={model.L}m)')
-    ax2.legend()
-    cbar2 = plt.colorbar(contour, ax=ax2)
-    cbar2.set_label('Temperature [°C]')
+    # FIGURE 1: Time series plots (4 rows, 1 column)
+    fig1, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=figsize)
 
-    # 3. Temperature profiles at different times
-    time_indeces = t_vals.get_indexer(t_eval, method='nearest')
-    for i in time_indeces:
-        ax3.plot(
-            x_vals, 
-            temp_vals[i] - ZERO_C, 
-            label=f't = {t_vals[i]:.0f}s', linewidth=2
-        )
-    ax3.set_xlabel('Position x [m]')
-    ax3.set_ylabel('Temperature T [°C]')
-    ax3.set_title('Temperature Profiles at Different Times')
-    # Mark the boundary between physical and extended domain
-    ax3.axvline(x=model.L, color='red', linestyle='--', alpha=0.7,
-                label=f'end (x={model.L}m)')
-    ax3.legend()
+    # 1. Velocity time series
+    ax1.plot(t_vals, v_vals, 'b-', linewidth=2)
+    ax1.set_ylabel('Velocity [m/s]')
+    ax1.set_title(f'{name} - Fluid Velocity')
+    ax1.grid(True, alpha=0.3)
+
+    # 2. Heat input time series
+    ax2.plot(t_vals, np.array(q_vals)/1e3, 'r-', linewidth=2)
+    ax2.set_ylabel('Heat Input [kW/m²]')
+    ax2.set_title(f'{name} - Solar Heat Input')
+    ax2.grid(True, alpha=0.3)
+
+    # 3. Inlet temperature time series
+    ax3.plot(t_vals, np.array(T_inlet_vals) - ZERO_C, 'g-', linewidth=2)
+    ax3.set_ylabel('Inlet Temp [°C]')
+    ax3.set_title(f'{name} - Oil Inlet Temperature')
     ax3.grid(True, alpha=0.3)
 
-    # 4. Temperature evolution at different positions
-    pos_indeces = x_vals.get_indexer(x_eval, method='nearest')
-    for j in pos_indeces:
-        add_text = " (end)" if np.isclose(x_vals[j], model.L) else ""
-        ax4.plot(
-            t_vals, 
-            temp_vals[:, j] - ZERO_C, 
-            label=f'x = {x_vals[j]:.0f}m' + add_text, linewidth=2
-        )
-    ax4.set_xlabel('Time t [s]')
-    ax4.set_ylabel('Temperature T [°C]')
-    ax4.set_title('Temperature Evolution at Different Positions')
-    ax4.legend()
+    # 4. Outlet temperature time series
+    ax4.plot(t_vals, outlet_temps, 'm-', linewidth=2)
+    ax4.set_xlabel('Time [s]')
+    ax4.set_ylabel('Outlet Temp [°C]')
+    ax4.set_title(f'{name} - Collector Outlet Temperature')
     ax4.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    return fig
+
+    # FIGURE 2: Contour plot (time on x-axis, position on y-axis)
+    fig2, ax_contour = plt.subplots(1, 1, figsize=figsize)
+
+    contour = ax_contour.contourf(
+        T_grid.T, 
+        X_grid.T, 
+        (temp_vals - ZERO_C).T, 
+        levels=20, 
+        cmap='viridis', 
+        extend='both'
+    )
+    ax_contour.set_xlabel('Time [s]')
+    ax_contour.set_ylabel('Position [m]')
+    ax_contour.set_title(f'{name} - Oil Temperature Field')
+    ax_contour.axhline(
+        y=model.L,
+        color='red',
+        linestyle='--',
+        alpha=0.7,
+        label=f'collector end (x={model.L}m)'
+    )
+    ax_contour.legend()
+    cbar = plt.colorbar(contour, ax=ax_contour)
+    cbar.set_label('Temperature [°C]')
+
+    plt.tight_layout()
+
+    return fig1, fig2
+
 
 def print_temp_profiles(model, t_eval, x_eval):
     """
@@ -427,8 +459,8 @@ def print_temp_profiles(model, t_eval, x_eval):
     # Temperature at different times along the pipe
     print("\nTemperature profiles at different times:")
     print(
-        f"{'Time [s]':<8} {'Inlet [K]':<10} {'Outlet [K]':<10} {'End [K]':<10} "
-        f"{'ΔT [K]':<10}"
+        f"{'Time [s]':<8} {'Inlet [K]':<10} {'Outlet [K]':<10} "
+        f"{'End [K]':<10} {'ΔT [K]':<10}"
     )
     print("-" * 50)
 
@@ -446,14 +478,20 @@ def print_temp_profiles(model, t_eval, x_eval):
 
     # Temperature evolution at different positions
     print("\nTemperature evolution at different positions:")
-    print(f"{'Position [m]':<12} {'Initial [K]':<12} {'Final [K]':<12} {'Change [K]':<12}")
+    print(
+        f"{'Position [m]':<12} {'Initial [K]':<12} {'Final [K]':<12} "
+        f"{'Change [K]':<12}"
+    )
     print("-" * 50)
 
     for i, x in zip(pos_indeces, x_eval):  # Sample positions
         T_initial = model.T[t_vals[0], x_vals[i]].value
         T_final = model.T[t_vals[-1], x_vals[i]].value
         temp_change = T_final - T_initial
-        print(f"{x:<12.2f} {T_initial:<12.1f} {T_final:<12.1f} {temp_change:<12.1f}")
+        print(
+            f"{x:<12.2f} {T_initial:<12.1f} {T_final:<12.1f} "
+            f"{temp_change:<12.1f}"
+        )
 
     # Check for numerical issues
     print("\nNumerical diagnostics:")
@@ -477,7 +515,10 @@ def print_temp_profiles(model, t_eval, x_eval):
             if i < len(x_vals) - 1:
                 # Approximate spatial gradient
                 dx = x_vals[i+1] - x_vals[i-1]
-                dT = model.T[t, x_vals[i+1]].value - model.T[t, x_vals[i-1]].value
+                dT = (
+                    model.T[t, x_vals[i+1]].value
+                    - model.T[t, x_vals[i-1]].value
+                )
                 gradient = abs(dT / dx) if dx > 0 else 0
                 if gradient > max_gradient:
                     max_gradient = gradient
@@ -485,9 +526,12 @@ def print_temp_profiles(model, t_eval, x_eval):
 
     print(f"Maximum spatial gradient: {max_gradient:.1f} K/m")
     if worst_location:
-        print(f"Location of max gradient: t={worst_location[0]:.2f}s, x={worst_location[1]:.2f}m")
+        print(
+            f"Location of max gradient: t={worst_location[0]:.2f}s, "
+            f"x={worst_location[1]:.2f}m"
+        )
 
     if max_gradient > 50:  # Arbitrary threshold for concern
-        print("⚠️  WARNING: Large temperature gradients detected - possible numerical instability")
+        print("⚠️  WARNING: Large temp. gradients.")
 
     print("="*60)

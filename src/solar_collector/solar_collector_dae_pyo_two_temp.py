@@ -28,9 +28,10 @@ ZERO_C = 273.15  # K
 THERMAL_DIFFUSIVITY = 0.25  # m²/s
 FLUID_DENSITY = 800  # kg/m³
 SPECIFIC_HEAT = 2000.0  # J/kg·K
-HEAT_TRANSFER_COEFF = 20.0  # W/m²·K
+HEAT_TRANSFER_COEFF_INT = 200.0  # W/m²·K (internal, pipe-to-fluid)
+HEAT_TRANSFER_COEFF_EXT = 20.0   # W/m²·K (external, pipe-to-ambient)
 PIPE_DIAMETER = 0.07  # m
-PIPE_WALL_THICKNESS = 0.002  # m
+PIPE_WALL_THICKNESS = 0.006  # m
 COLLECTOR_LENGTH = 100.0  # m
 PIPE_THERMAL_CONDUCTIVITY = 50.0  # W/m·K (typical for steel)
 PIPE_DENSITY = 7850.0  # kg/m³ (steel)
@@ -51,7 +52,8 @@ def create_pipe_flow_model(
     T_ambient=ZERO_C + 20.0,
     pipe_diameter=PIPE_DIAMETER,
     pipe_wall_thickness=PIPE_WALL_THICKNESS,
-    heat_transfer_coeff=HEAT_TRANSFER_COEFF,
+    heat_transfer_coeff_int=HEAT_TRANSFER_COEFF_INT,
+    heat_transfer_coeff_ext=HEAT_TRANSFER_COEFF_EXT,
     pipe_thermal_conductivity=PIPE_THERMAL_CONDUCTIVITY,
     pipe_density=PIPE_DENSITY,
     pipe_specific_heat=PIPE_SPECIFIC_HEAT
@@ -90,8 +92,10 @@ def create_pipe_flow_model(
         Inner pipe diameter D [m]
     pipe_wall_thickness : float, default=0.002
         Pipe wall thickness d [m]
-    heat_transfer_coeff : float, default=20.0
-        Convective heat transfer coefficient h [W/m²·K]
+    heat_transfer_coeff_int : float, default=200.0
+        Internal heat transfer coefficient h_int [W/m²·K] (pipe-to-fluid)
+    heat_transfer_coeff_ext : float, default=20.0
+        External heat transfer coefficient h_ext [W/m²·K] (pipe-to-ambient)
     pipe_thermal_conductivity : float, default=50.0
         Pipe wall thermal conductivity k_p [W/m·K]
     pipe_density : float, default=7850.0
@@ -125,8 +129,8 @@ def create_pipe_flow_model(
     model.L_extended = L_extended  # Full domain length
 
     # Temperature variables with proper bounds
-    model.T_f = Var(model.t, model.x, bounds=(0.0, None))  # Fluid temperature
-    model.T_p = Var(model.t, model.x, bounds=(0.0, None))  # Pipe wall temperature
+    model.T_f = Var(model.t, model.x, bounds=(0.0, None))  # Fluid
+    model.T_p = Var(model.t, model.x, bounds=(0.0, None))  # Pipe wall
 
     # Derivative variables for fluid temperature
     model.dT_f_dt = DerivativeVar(model.T_f, wrt=model.t)
@@ -152,7 +156,8 @@ def create_pipe_flow_model(
     model.T_ambient = Param(initialize=T_ambient)          # [K]
     model.D = Param(initialize=pipe_diameter)              # [m]
     model.d = Param(initialize=pipe_wall_thickness)        # [m]
-    model.h = Param(initialize=heat_transfer_coeff)        # [W/m²·K]
+    model.h_int = Param(initialize=heat_transfer_coeff_int) # [W/m²·K]
+    model.h_ext = Param(initialize=heat_transfer_coeff_ext) # [W/m²·K]
 
     # Default parameter functions if none provided
     if velocity_func is None:
@@ -161,8 +166,9 @@ def create_pipe_flow_model(
 
     if heat_func is None:
         def heat_func(t):
+            # Heat flux to pipe wall [W/m²]
             if t > 60.0 and t <= 240.0:
-                return 1000.0  # heat flux to pipe wall [W/m²]
+                return 40e3
             return 0.0
 
     if inlet_func is None:
@@ -198,15 +204,17 @@ def add_pde_constraints(model):
 
         # Heat transfer from pipe wall to fluid per unit volume [W/m³]
         # Heat transfer area per unit length: π * D [m²/m]
-        # Heat transfer per unit length: h * π * D * (T_p - T_f) [W/m]
-        # Heat transfer per unit volume: h * π * D * (T_p - T_f) / (π * D² / 4)
-        # Simplified: h * 4 * (T_p - T_f) / D [W/m³]
-        heat_from_wall = m.h * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+        # Heat transfer per unit length: h_int * π * D * (T_p - T_f) [W/m]
+        # Heat transfer per unit volume: h_int * π * D * (T_p - T_f) / (π * D² / 4)
+        # Simplified: h_int * 4 * (T_p - T_f) / D [W/m³]
+        heat_to_fluid = m.h_int * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
 
-        # Fluid PDE: ∂T_f/∂t + v(t)∂T_f/∂x = α_f∂²T_f/∂x² + q_wall_to_fluid/(ρ_f*cp_f)
+        # Fluid PDE: (energy balance)
+        #   ρcp ∂T_f/∂t + ρcp v(t)∂T_f/∂x = ρcp α_f∂²T_f/∂x² + q_to_fluid
+        rho_cp = m.rho_f * m.cp_f
         return (
-            m.dT_f_dt[t, x] + m.v[t] * m.dT_f_dx[t, x] ==
-            m.alpha_f * m.d2T_f_dx2[t, x] + heat_from_wall / (m.rho_f * m.cp_f)
+            rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t] * m.dT_f_dx[t, x] ==
+            rho_cp * m.alpha_f * m.d2T_f_dx2[t, x] + heat_to_fluid
         )
 
     # Pipe wall temperature PDE constraint
@@ -216,46 +224,65 @@ def add_pde_constraints(model):
         if t == 0:
             return Constraint.Skip
 
+        # Density * specific heat for pipe wall
+        rho_cp = m.rho_p * m.cp_p
+
         # For nominal physical pipe (0 < x <= L): include heat input
         if x <= m.L:
             # Heat input to pipe wall per unit volume [W/m³]
             # Heat flux q(t) [W/m²] applied to outer surface
             # Outer diameter: D + 2*d
             # Heat input per unit length: q(t) * π * (D + 2*d) [W/m]
-            # Pipe wall volume per unit length: π * ((D+2*d)² - D²) / 4 [m³/m]
-            # Heat input per unit volume: q(t) * π * (D + 2*d) / (π * ((D+2*d)² - D²) / 4)
-            # Simplified: q(t) * 4 * (D + 2*d) / ((D+2*d)² - D²) [W/m³]
+            # Pipe wall volume per unit length:
+            #   π * ((D+2*d)² - D²) / 4 [m³/m]
+            # Heat input per unit volume:
+            #   q(t) * π * (D + 2*d) / (π * ((D+2*d)² - D²) / 4)
+            # Simplified:
+            #   q(t) * 4 * (D + 2*d) / ((D+2*d)² - D²) [W/m³]
             D_outer = m.D + 2 * m.d
-            heat_input_volumetric = m.q[t] * 4.0 * D_outer / (D_outer**2 - m.D**2)
+            heat_input_volumetric = (
+                m.q[t] * 4.0 * D_outer / (D_outer**2 - m.D**2)
+            )
 
             # Heat transfer to fluid per unit volume [W/m³]
-            heat_to_fluid = m.h * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+            heat_to_fluid = m.h_int * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
 
             # Heat loss to ambient per unit volume [W/m³]
-            # Heat loss per unit length: h * π * (D + 2*d) * (T_p - T_ambient) [W/m]
-            # Heat loss per unit volume: h * π * (D + 2*d) * (T_p - T_ambient) / wall_volume_per_length
-            heat_loss_volumetric = m.h * 4.0 * D_outer * (m.T_p[t, x] - m.T_ambient) / (D_outer**2 - m.D**2)
+            # Heat loss per unit length:
+            #   h_ext * π * (D + 2*d) * (T_p - T_ambient) [W/m]
+            # Heat loss per unit volume:
+            #   h_ext * π * (D + 2*d) * (T_p - T_ambient) / wall_volume_per_length
+            heat_loss_volumetric = (
+                m.h_ext * 4.0 * D_outer * (m.T_p[t, x] - m.T_ambient)
+                / (D_outer**2 - m.D**2)
+            )
 
             # Pipe thermal diffusivity: k_p / (ρ_p * cp_p)
             alpha_p = m.k_p / (m.rho_p * m.cp_p)
 
-            # Wall PDE: ∂T_p/∂t = α_p∂²T_p/∂x² + (q_input - q_to_fluid - q_to_ambient)/(ρ_p*cp_p)
-            return (
-                m.dT_p_dt[t, x] ==
-                alpha_p * m.d2T_p_dx2[t, x] +
-                (heat_input_volumetric - heat_to_fluid - heat_loss_volumetric) / (m.rho_p * m.cp_p)
+            # Wall PDE: (energy balance)
+            #   ρcp ∂T_p/∂t = α_p ρcp ∂²T_p/∂x²
+            #      + q_input - q_to_fluid - q_to_ambient
+            return rho_cp * m.dT_p_dt[t, x] == (
+                    rho_cp * alpha_p * m.d2T_p_dx2[t, x]
+                    + heat_input_volumetric - heat_to_fluid
+                    - heat_loss_volumetric
             )
+
         else:
             # For extended section (L < x <= L_extended): no heat input
-            heat_to_fluid = m.h * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+            heat_to_fluid = m.h_int * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
             D_outer = m.D + 2 * m.d
-            heat_loss_volumetric = m.h * 4.0 * D_outer * (m.T_p[t, x] - m.T_ambient) / (D_outer**2 - m.D**2)
-            alpha_p = m.k_p / (m.rho_p * m.cp_p)
+            heat_loss_volumetric = (
+                m.h_ext * 4.0 * D_outer * (m.T_p[t, x] - m.T_ambient)
+                / (D_outer**2 - m.D**2)
+            )
+            alpha_p = m.k_p / rho_cp
 
-            return (
-                m.dT_p_dt[t, x] ==
-                alpha_p * m.d2T_p_dx2[t, x] -
-                (heat_to_fluid + heat_loss_volumetric) / (m.rho_p * m.cp_p)
+            return rho_cp * m.dT_p_dt[t, x] == (
+                rho_cp * alpha_p * m.d2T_p_dx2[t, x]
+                - heat_to_fluid
+                - heat_loss_volumetric
             )
 
     # Initial conditions
@@ -268,7 +295,7 @@ def add_pde_constraints(model):
 
     @model.Constraint(model.x)
     def wall_initial_condition(m, x):
-        T_0 = ZERO_C + 270.0  # initial wall temperature
+        T_0 = ZERO_C + 100.0  # initial wall temperature
         return m.T_p[0, x] == T_0
 
     # Inlet boundary condition for fluid
@@ -380,3 +407,354 @@ def solve_model(
     results = solver.solve(model, tee=tee)
 
     return results
+
+
+def plot_results(
+    model, t_eval, x_eval, name="Oil + Pipe Model", figsize=(8, 7.5)
+):
+    """
+    Plot temperature field solutions for both fluid and pipe wall temperatures
+
+    Parameters:
+    -----------
+    model : pyomo.ConcreteModel
+        Solved Pyomo model containing temperature solutions
+    t_eval : array-like
+        Times to evaluate (used for compatibility, not actively used)
+    x_eval : array-like
+        Positions to evaluate (used for compatibility, not actively used)
+    figsize : tuple, default=(8, 7.5)
+        Figure size as (width, height) in inches (not used in current layout)
+
+    Returns:
+    --------
+    fig1 : matplotlib.figure.Figure
+        Figure with 4 time series plots (velocity, heat input, inlet temp,
+        outlet temps)
+    fig2 : matplotlib.figure.Figure
+        Figure with contour plot of fluid temperature field (time vs position)
+    fig3 : matplotlib.figure.Figure
+        Figure with contour plot of pipe wall temperature field (time vs
+        position)
+
+    Notes:
+    ------
+    Figure 1 (4x1 layout):
+    - Row 1: Fluid velocity over time
+    - Row 2: Solar heat input over time
+    - Row 3: Inlet temperature over time
+    - Row 4: Outlet temperatures (both fluid and wall) at collector end
+
+    Figure 2 & 3:
+    - Contour plots with time on x-axis and position on y-axis
+    - Consistent colorbar range (0-400°C) for easy comparison
+    - Red dashed line marks end of solar collector section (x = L)
+    """
+    t_eval = np.array(t_eval).reshape(-1)
+    x_eval = np.array(x_eval).reshape(-1)
+
+    # Extract solution data
+    t_vals = pd.Index(model.t)
+    x_vals = pd.Index(model.x)
+
+    # Create meshgrid
+    T_grid, X_grid = np.meshgrid(t_vals, x_vals, indexing='ij')
+
+    # Extract fluid temperature values
+    temp_f_vals = np.array([
+        [pyo.environ.value(model.T_f[t, x]) for x in x_vals] for t in t_vals
+    ])
+
+    # Extract pipe wall temperature values
+    temp_p_vals = np.array([
+        [pyo.environ.value(model.T_p[t, x]) for x in x_vals] for t in t_vals
+    ])
+
+    # Extract input parameter values
+    v_vals = [pyo.environ.value(model.v[t]) for t in t_vals]
+    q_vals = [pyo.environ.value(model.q[t]) for t in t_vals]
+    T_inlet_vals = [pyo.environ.value(model.T_inlet[t]) for t in t_vals]
+
+    # Find index closest to collector end (x = L) for outlet temperatures
+    end_idx = np.argmin(np.abs(np.array(x_vals) - model.L))
+    outlet_temps_f = temp_f_vals[:, end_idx] - ZERO_C
+    outlet_temps_p = temp_p_vals[:, end_idx] - ZERO_C
+
+    # Define consistent temperature range for colorbars (0-400°C)
+    temp_levels = np.linspace(0, 400, 21)
+
+    # FIGURE 1: Time series plots (4 rows, 1 column)
+    fig1, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=figsize)
+
+    # 1. Velocity time series
+    ax1.plot(t_vals, v_vals, 'b-', linewidth=2)
+    ax1.set_ylabel('Velocity [m/s]')
+    ax1.set_title(f'{name} - Fluid Velocity')
+    ax1.grid(True, alpha=0.3)
+
+    # 2. Heat input time series
+    ax2.plot(t_vals, np.array(q_vals)/1e3, 'r-', linewidth=2)
+    ax2.set_ylabel('Heat Input [kW/m²]')
+    ax2.set_title(f'{name} - Solar Heat Input')
+    ax2.grid(True, alpha=0.3)
+
+    # 3. Inlet temperature time series
+    ax3.plot(t_vals, np.array(T_inlet_vals) - ZERO_C, 'g-', linewidth=2)
+    ax3.set_ylabel('Inlet Temp [°C]')
+    ax3.set_title(f'{name} - Oil Inlet Temperature')
+    ax3.grid(True, alpha=0.3)
+
+    # 4. Outlet temperatures time series (both fluid and wall)
+    ax4.plot(t_vals, outlet_temps_f, 'b-', linewidth=2, label='Fluid')
+    ax4.plot(t_vals, outlet_temps_p, 'r-', linewidth=2, label='Wall')
+    ax4.set_xlabel('Time [s]')
+    ax4.set_ylabel('Outlet Temp [°C]')
+    ax4.set_title(f'{name} - Collector Outlet Temperatures')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    # FIGURE 2: Fluid temperature contour (time on x-axis, position on y-axis)
+    fig2, ax_contour_f = plt.subplots(1, 1, figsize=figsize)
+
+    contour_f = ax_contour_f.contourf(
+        T_grid.T, 
+        X_grid.T, 
+        (temp_f_vals - ZERO_C).T,
+        levels=temp_levels, 
+        cmap='viridis', 
+        extend='both'
+    )
+    ax_contour_f.set_xlabel('Time [s]')
+    ax_contour_f.set_ylabel('Position [m]')
+    ax_contour_f.set_title(f'{name} - Oil Temperature Field')
+    ax_contour_f.axhline(
+        y=model.L,
+        color='red',
+        linestyle='--',
+        alpha=0.7,
+        label='collector end'
+    )
+    ax_contour_f.legend()
+    cbar_f = plt.colorbar(contour_f, ax=ax_contour_f)
+    cbar_f.set_label('Temperature [°C]')
+
+    plt.tight_layout()
+
+    # FIGURE 3: Pipe wall temperature contour (time on x-axis, position
+    # on y-axis)
+    fig3, ax_contour_p = plt.subplots(1, 1, figsize=figsize)
+
+    contour_p = ax_contour_p.contourf(
+        T_grid.T, 
+        X_grid.T, 
+        (temp_p_vals - ZERO_C).T,
+        levels=temp_levels, 
+        cmap='viridis', 
+        extend='both'
+    )
+    ax_contour_p.set_xlabel('Time [s]')
+    ax_contour_p.set_ylabel('Position [m]')
+    ax_contour_p.set_title(f'{name} - Pipe Wall Temperature Field')
+    ax_contour_p.axhline(
+        y=model.L,
+        color='red',
+        linestyle='--',
+        alpha=0.7,
+        label='collector end'
+    )
+    ax_contour_p.legend()
+    cbar_p = plt.colorbar(contour_p, ax=ax_contour_p)
+    cbar_p.set_label('Temperature [°C]')
+
+    plt.tight_layout()
+
+    return fig1, fig2, fig3
+
+
+def print_temp_profiles(model, t_eval, x_eval):
+    """
+    Print temperature profiles for both fluid and pipe wall temperatures
+    """
+    t_eval = np.array(t_eval).reshape(-1)
+    x_eval = np.array(x_eval).reshape(-1)
+
+    # Extract solution data
+    t_vals = pd.Index(model.t)
+    x_vals = pd.Index(model.x)
+
+    print("\n" + "="*80)
+    print("TWO-TEMPERATURE MODEL ANALYSIS")
+    print("="*80)
+
+    # Temperature profiles at different times
+    print("\nFluid and pipe wall temperature profiles at different times:")
+    print(
+        f"{'Time [s]':<8} {'T_f Inlet [K]':<12} {'T_f End [K]':<10} "
+        f"{'T_p End [K]':<10} {'ΔT_f [K]':<10} {'T_p-T_f [K]':<12}"
+    )
+    print("-" * 70)
+
+    time_indeces = t_vals.get_indexer(t_eval, method='nearest')
+    pos_indeces = x_vals.get_indexer(x_eval, method='nearest')
+
+    for i, t in zip(time_indeces, t_eval):
+        T_f_inlet = model.T_f[t_vals[i], x_vals[0]].value
+        T_f_end = model.T_f[t_vals[i], x_vals[pos_indeces[-2]]].value
+        T_p_end = model.T_p[t_vals[i], x_vals[pos_indeces[-2]]].value
+        delta_T_f = T_f_end - T_f_inlet
+        temp_diff = T_p_end - T_f_end
+        print(
+            f"{t:<8.2f} {T_f_inlet:<12.1f} {T_f_end:<10.1f} "
+            f"{T_p_end:<10.1f} {delta_T_f:<10.1f} {temp_diff:<12.1f}"
+        )
+
+    # Temperature evolution at different positions
+    print("\nFluid temperature evolution at different positions:")
+    print(
+        f"{'Position [m]':<12} {'Initial [K]':<12} {'Final [K]':<12} "
+        f"{'Change [K]':<12}"
+    )
+    print("-" * 50)
+
+    for i, x in zip(pos_indeces, x_eval):
+        T_f_initial = model.T_f[t_vals[0], x_vals[i]].value
+        T_f_final = model.T_f[t_vals[-1], x_vals[i]].value
+        temp_change = T_f_final - T_f_initial
+        print(
+            f"{x:<12.2f} {T_f_initial:<12.1f} {T_f_final:<12.1f} "
+            f"{temp_change:<12.1f}"
+        )
+
+    print("\nPipe wall temperature evolution at different positions:")
+    print(
+        f"{'Position [m]':<12} {'Initial [K]':<12} {'Final [K]':<12} "
+        f"{'Change [K]':<12}"
+    )
+    print("-" * 50)
+
+    for i, x in zip(pos_indeces, x_eval):
+        T_p_initial = model.T_p[t_vals[0], x_vals[i]].value
+        T_p_final = model.T_p[t_vals[-1], x_vals[i]].value
+        temp_change = T_p_final - T_p_initial
+        print(
+            f"{x:<12.2f} {T_p_initial:<12.1f} {T_p_final:<12.1f} "
+            f"{temp_change:<12.1f}"
+        )
+
+    # Numerical diagnostics
+    print("\nNumerical diagnostics:")
+    print("-" * 40)
+
+    # Find min/max temperatures for both variables
+    all_temps_f = []
+    all_temps_p = []
+    all_temp_diffs = []
+
+    for t in t_vals:
+        for x in x_vals:
+            T_f = model.T_f[t, x].value
+            T_p = model.T_p[t, x].value
+            all_temps_f.append(T_f)
+            all_temps_p.append(T_p)
+            all_temp_diffs.append(T_p - T_f)
+
+    min_temp_f = min(all_temps_f)
+    max_temp_f = max(all_temps_f)
+    min_temp_p = min(all_temps_p)
+    min_diff = min(all_temp_diffs)
+    max_diff = max(all_temp_diffs)
+
+    print(
+        f"Fluid temperature range: {min_temp_f:.1f} K to {max_temp_f:.1f} K"
+    )
+    print(
+        f"Pipe wall temperature range: {min_temp_p:.1f} K to "
+        "{max_temp_p:.1f} K"
+    )
+    print(
+        f"Temperature difference range: {min_diff:.1f} K to {max_diff:.1f} K"
+    )
+
+    # Check for instabilities (large gradients)
+    max_gradient_f = 0
+    max_gradient_p = 0
+    worst_location_f = None
+    worst_location_p = None
+
+    for t in t_vals[1:]:  # Skip initial time
+        for i, x in enumerate(x_vals[1:-1], 1):  # Skip boundaries
+            if i < len(x_vals) - 1:
+                # Approximate spatial gradients
+                dx = x_vals[i+1] - x_vals[i-1]
+
+                # Fluid gradient
+                dT_f = (
+                    model.T_f[t, x_vals[i+1]].value
+                    - model.T_f[t, x_vals[i-1]].value
+                )
+                gradient_f = abs(dT_f / dx) if dx > 0 else 0
+                if gradient_f > max_gradient_f:
+                    max_gradient_f = gradient_f
+                    worst_location_f = (t, x)
+
+                # Pipe wall gradient
+                dT_p = (
+                    model.T_p[t, x_vals[i+1]].value
+                    - model.T_p[t, x_vals[i - 1]].value
+                )
+                gradient_p = abs(dT_p / dx) if dx > 0 else 0
+                if gradient_p > max_gradient_p:
+                    max_gradient_p = gradient_p
+                    worst_location_p = (t, x)
+
+    print(f"Maximum fluid spatial gradient: {max_gradient_f:.1f} K/m")
+    if worst_location_f:
+        print(
+            f"Location of max fluid gradient: "
+            f"t={worst_location_f[0]:.2f}s, x={worst_location_f[1]:.2f}m"
+        )
+
+    print(f"Maximum pipe wall spatial gradient: {max_gradient_p:.1f} K/m")
+    if worst_location_p:
+        print(
+            f"Location of max pipe wall gradient: "
+            f"t={worst_location_p[0]:.2f}s, x={worst_location_p[1]:.2f}m"
+        )
+
+    if max_gradient_f > 50 or max_gradient_p > 50:
+        print("⚠️  WARNING: Large temp. gradients.")
+
+    # Heat transfer analysis
+    print("\nHeat transfer analysis:")
+    print("-" * 30)
+
+    # Average temperature difference in collector section
+    avg_temp_diff = 0
+    count = 0
+    for t in t_vals[-5:]:  # Use last few time points
+        for x in x_vals:
+            if x <= model.L:  # Only in collector section
+                T_f = model.T_f[t, x].value
+                T_p = model.T_p[t, x].value
+                avg_temp_diff += (T_p - T_f)
+                count += 1
+
+    if count > 0:
+        avg_temp_diff /= count
+        print(
+            "Average temperature difference (T_p - T_f) in collector: "
+            f"{avg_temp_diff:.1f} K"
+        )
+
+        # Estimate heat transfer rate per unit length
+        h_int_val = pyo.environ.value(model.h_int)
+        D_val = pyo.environ.value(model.D)
+        heat_transfer_rate = h_int_val * np.pi * D_val * avg_temp_diff  # W/m
+        print(
+            "Estimated heat transfer rate from wall to fluid: "
+            f"{heat_transfer_rate:.0f} W/m"
+        )
+
+    print("="*80)
