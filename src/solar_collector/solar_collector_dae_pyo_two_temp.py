@@ -6,24 +6,23 @@ transfer in a solar collector pipe using Pyomo's differential-algebraic
 equation (DAE) framework. The model includes separate temperatures for the
 fluid (T_f) and pipe wall (T_p) with heat transfer between them and to ambient.
 """
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import pyomo as pyo
-
-from pyomo.dae import DerivativeVar, ContinuousSet
+from pyomo.dae import ContinuousSet, DerivativeVar
 from pyomo.environ import (
-    Var,
-    Param,
+    ConcreteModel,
     Constraint,
     Objective,
+    Param,
     SolverFactory,
-    ConcreteModel,
     TransformationFactory,
+    Var,
 )
 
-from solar_collector.config import VAR_INFO, PLOT_COLORS
-
+from solar_collector.config import PLOT_COLORS, VAR_INFO
 
 # Constants
 ZERO_C = 273.15  # K
@@ -31,7 +30,7 @@ THERMAL_DIFFUSIVITY = 0.25  # m²/s
 FLUID_DENSITY = 800  # kg/m³
 SPECIFIC_HEAT = 2000.0  # J/kg·K
 HEAT_TRANSFER_COEFF_INT = 200.0  # W/m²·K (internal, pipe-to-fluid)
-HEAT_TRANSFER_COEFF_EXT = 20.0   # W/m²·K (external, pipe-to-ambient)
+HEAT_TRANSFER_COEFF_EXT = 20.0  # W/m²·K (external, pipe-to-ambient)
 PIPE_DIAMETER = 0.07  # m
 PIPE_WALL_THICKNESS = 0.006  # m
 COLLECTOR_LENGTH = 100.0  # m
@@ -58,7 +57,7 @@ def create_pipe_flow_model(
     heat_transfer_coeff_ext=HEAT_TRANSFER_COEFF_EXT,
     pipe_thermal_conductivity=PIPE_THERMAL_CONDUCTIVITY,
     pipe_density=PIPE_DENSITY,
-    pipe_specific_heat=PIPE_SPECIFIC_HEAT
+    pipe_specific_heat=PIPE_SPECIFIC_HEAT,
 ):
     """
     Create Pyomo model for pipe flow heat transport PDE with fluid and wall
@@ -146,27 +145,29 @@ def create_pipe_flow_model(
 
     # Fluid properties
     model.alpha_f = Param(initialize=thermal_diffusivity)  # [m²/s]
-    model.rho_f = Param(initialize=fluid_density)          # [kg/m³]
-    model.cp_f = Param(initialize=specific_heat)           # [J/kg·K]
+    model.rho_f = Param(initialize=fluid_density)  # [kg/m³]
+    model.cp_f = Param(initialize=specific_heat)  # [J/kg·K]
 
     # Pipe properties
-    model.rho_p = Param(initialize=pipe_density)           # [kg/m³]
-    model.cp_p = Param(initialize=pipe_specific_heat)      # [J/kg·K]
+    model.rho_p = Param(initialize=pipe_density)  # [kg/m³]
+    model.cp_p = Param(initialize=pipe_specific_heat)  # [J/kg·K]
     model.k_p = Param(initialize=pipe_thermal_conductivity)  # [W/m·K]
 
     # Geometric parameters
-    model.T_ambient = Param(initialize=T_ambient)          # [K]
-    model.D = Param(initialize=pipe_diameter)              # [m]
-    model.d = Param(initialize=pipe_wall_thickness)        # [m]
+    model.T_ambient = Param(initialize=T_ambient)  # [K]
+    model.D = Param(initialize=pipe_diameter)  # [m]
+    model.d = Param(initialize=pipe_wall_thickness)  # [m]
     model.h_int = Param(initialize=heat_transfer_coeff_int)  # [W/m²·K]
     model.h_ext = Param(initialize=heat_transfer_coeff_ext)  # [W/m²·K]
 
     # Default parameter functions if none provided
     if velocity_func is None:
+
         def velocity_func(t):
             return 0.2  # velocity [m/s]
 
     if heat_func is None:
+
         def heat_func(t):
             # Heat flux to pipe wall [W/m²]
             if t > 60.0 and t <= 240.0:
@@ -174,6 +175,7 @@ def create_pipe_flow_model(
             return 0.0
 
     if inlet_func is None:
+
         def inlet_func(t):
             return ZERO_C + 270.0
 
@@ -218,8 +220,8 @@ def add_pde_constraints(model):
         #   ρcp ∂T_f/∂t + ρcp v(t)∂T_f/∂x = ρcp α_f∂²T_f/∂x² + q_to_fluid
         rho_cp = m.rho_f * m.cp_f
         return (
-            rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t] * m.dT_f_dx[t, x] ==
-            rho_cp * m.alpha_f * m.d2T_f_dx2[t, x] + heat_to_fluid
+            rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t] * m.dT_f_dx[t, x]
+            == rho_cp * m.alpha_f * m.d2T_f_dx2[t, x] + heat_to_fluid
         )
 
     # Pipe wall temperature PDE constraint
@@ -259,7 +261,10 @@ def add_pde_constraints(model):
             #   h_ext * π * (D + 2*d) * (T_p - T_ambient) /
             #   wall_volume_per_length
             heat_loss_volumetric = (
-                m.h_ext * 4.0 * D_outer * (m.T_p[t, x] - m.T_ambient)
+                m.h_ext
+                * 4.0
+                * D_outer
+                * (m.T_p[t, x] - m.T_ambient)
                 / (D_outer**2 - m.D**2)
             )
 
@@ -270,9 +275,10 @@ def add_pde_constraints(model):
             #   ρcp ∂T_p/∂t = α_p ρcp ∂²T_p/∂x²
             #      + q_input - q_to_fluid - q_to_ambient
             return rho_cp * m.dT_p_dt[t, x] == (
-                    rho_cp * alpha_p * m.d2T_p_dx2[t, x]
-                    + heat_input_volumetric - heat_to_fluid
-                    - heat_loss_volumetric
+                rho_cp * alpha_p * m.d2T_p_dx2[t, x]
+                + heat_input_volumetric
+                - heat_to_fluid
+                - heat_loss_volumetric
             )
 
         else:
@@ -280,7 +286,10 @@ def add_pde_constraints(model):
             heat_to_fluid = m.h_int * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
             D_outer = m.D + 2 * m.d
             heat_loss_volumetric = (
-                m.h_ext * 4.0 * D_outer * (m.T_p[t, x] - m.T_ambient)
+                m.h_ext
+                * 4.0
+                * D_outer
+                * (m.T_p[t, x] - m.T_ambient)
                 / (D_outer**2 - m.D**2)
             )
             alpha_p = m.k_p / rho_cp
@@ -355,13 +364,13 @@ def solve_model(
 
     # Apply finite difference discretization
     # Use CENTRAL difference for spatial discretization (better accuracy)
-    TransformationFactory('dae.finite_difference').apply_to(
-        model, nfe=n_x, scheme='CENTRAL', wrt=model.x
+    TransformationFactory("dae.finite_difference").apply_to(
+        model, nfe=n_x, scheme="CENTRAL", wrt=model.x
     )
 
     # Temporal discretization (backward Euler for stability)
-    TransformationFactory('dae.finite_difference').apply_to(
-        model, nfe=n_t, scheme='BACKWARD', wrt=model.t
+    TransformationFactory("dae.finite_difference").apply_to(
+        model, nfe=n_t, scheme="BACKWARD", wrt=model.t
     )
 
     # Outlet boundary conditions (zero gradient)
@@ -404,10 +413,10 @@ def solve_model(
             model.T_p[t, x].set_value(T_guess)
 
     # Configure solver with simpler options
-    solver = SolverFactory('ipopt')
-    solver.options['max_iter'] = max_iter
-    solver.options['tol'] = tol
-    solver.options['print_level'] = print_level
+    solver = SolverFactory("ipopt")
+    solver.options["max_iter"] = max_iter
+    solver.options["tol"] = tol
+    solver.options["print_level"] = print_level
 
     print("Solving with IPOPT...")
     results = solver.solve(model, tee=tee)
@@ -422,7 +431,7 @@ def plot_results(
     name="Oil + Pipe Model",
     var_info=VAR_INFO,
     colors=PLOT_COLORS,
-    figsize=(8, 7.5)
+    figsize=(8, 7.5),
 ):
     """
     Plot temperature field solutions for both fluid and pipe wall temperatures
@@ -470,17 +479,17 @@ def plot_results(
     x_vals = pd.Index(model.x)
 
     # Create meshgrid
-    T_grid, X_grid = np.meshgrid(t_vals, x_vals, indexing='ij')
+    T_grid, X_grid = np.meshgrid(t_vals, x_vals, indexing="ij")
 
     # Extract fluid temperature values
-    temp_f_vals = np.array([
-        [pyo.environ.value(model.T_f[t, x]) for x in x_vals] for t in t_vals
-    ])
+    temp_f_vals = np.array(
+        [[pyo.environ.value(model.T_f[t, x]) for x in x_vals] for t in t_vals]
+    )
 
     # Extract pipe wall temperature values
-    temp_p_vals = np.array([
-        [pyo.environ.value(model.T_p[t, x]) for x in x_vals] for t in t_vals
-    ])
+    temp_p_vals = np.array(
+        [[pyo.environ.value(model.T_p[t, x]) for x in x_vals] for t in t_vals]
+    )
 
     # Extract input parameter values
     v_vals = [pyo.environ.value(model.v[t]) for t in t_vals]
@@ -500,36 +509,48 @@ def plot_results(
     fig1, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=figsize)
 
     # 1. Velocity time series
-    ax1.plot(t_vals, v_vals, color=colors['v'], linewidth=2)
-    ax1.set_ylabel('Velocity [m/s]')
-    ax1.set_title(f'{name} - Fluid Velocity')
+    ax1.plot(t_vals, v_vals, color=colors["v"], linewidth=2)
+    ax1.set_ylabel("Velocity [m/s]")
+    ax1.set_title(f"{name} - Fluid Velocity")
     ax1.grid(True, alpha=0.3)
 
     # 2. Heat input time series
-    ax2.plot(t_vals, np.array(q_vals)/1e3, color=colors['q_solar_conc'],
-             linewidth=2)
-    ax2.set_ylabel('Heat Input [kW/m²]')
-    ax2.set_title(f'{name} - Solar Heat Input')
+    ax2.plot(
+        t_vals,
+        np.array(q_vals) / 1e3,
+        color=colors["q_solar_conc"],
+        linewidth=2,
+    )
+    ax2.set_ylabel("Heat Input [kW/m²]")
+    ax2.set_title(f"{name} - Solar Heat Input")
     ax2.grid(True, alpha=0.3)
 
     # 3. Inlet temperature time series
-    ax3.plot(t_vals, np.array(T_inlet_vals) - ZERO_C, color=colors['T_f'],
-             linewidth=2, label='Oil')
-    ax3.plot(t_vals, inlet_temps_p, color=colors['T_p'], linewidth=2,
-             label='Wall')
-    ax3.set_ylabel('Inlet Temp [°C]')
-    ax3.set_title(f'{name} - Collector Inlet Temperatures')
+    ax3.plot(
+        t_vals,
+        np.array(T_inlet_vals) - ZERO_C,
+        color=colors["T_f"],
+        linewidth=2,
+        label="Oil",
+    )
+    ax3.plot(
+        t_vals, inlet_temps_p, color=colors["T_p"], linewidth=2, label="Wall"
+    )
+    ax3.set_ylabel("Inlet Temp [°C]")
+    ax3.set_title(f"{name} - Collector Inlet Temperatures")
     ax3.legend()
     ax3.grid(True, alpha=0.3)
 
     # 4. Outlet temperatures time series (both fluid and wall)
-    ax4.plot(t_vals, outlet_temps_f, color=colors['T_f'], linewidth=2,
-             label='Oil')
-    ax4.plot(t_vals, outlet_temps_p, color=colors['T_p'], linewidth=2,
-             label='Wall')
-    ax4.set_xlabel('Time [s]')
-    ax4.set_ylabel('Outlet Temp [°C]')
-    ax4.set_title(f'{name} - Collector Outlet Temperatures')
+    ax4.plot(
+        t_vals, outlet_temps_f, color=colors["T_f"], linewidth=2, label="Oil"
+    )
+    ax4.plot(
+        t_vals, outlet_temps_p, color=colors["T_p"], linewidth=2, label="Wall"
+    )
+    ax4.set_xlabel("Time [s]")
+    ax4.set_ylabel("Outlet Temp [°C]")
+    ax4.set_title(f"{name} - Collector Outlet Temperatures")
     ax4.legend()
     ax4.grid(True, alpha=0.3)
 
@@ -543,22 +564,22 @@ def plot_results(
         X_grid.T,
         (temp_f_vals - ZERO_C).T,
         levels=temp_levels,
-        cmap='viridis',
-        extend='both'
+        cmap="viridis",
+        extend="both",
     )
-    ax_contour_f.set_xlabel('Time [s]')
-    ax_contour_f.set_ylabel('Position [m]')
-    ax_contour_f.set_title(f'{name} - Oil Temperature Field')
+    ax_contour_f.set_xlabel("Time [s]")
+    ax_contour_f.set_ylabel("Position [m]")
+    ax_contour_f.set_title(f"{name} - Oil Temperature Field")
     ax_contour_f.axhline(
         y=model.L,
-        color='red',
-        linestyle='--',
+        color="red",
+        linestyle="--",
         alpha=0.7,
-        label='collector end'
+        label="collector end",
     )
     ax_contour_f.legend()
     cbar_f = plt.colorbar(contour_f, ax=ax_contour_f)
-    cbar_f.set_label('Temperature [°C]')
+    cbar_f.set_label("Temperature [°C]")
 
     plt.tight_layout()
 
@@ -571,22 +592,22 @@ def plot_results(
         X_grid.T,
         (temp_p_vals - ZERO_C).T,
         levels=temp_levels,
-        cmap='viridis',
-        extend='both'
+        cmap="viridis",
+        extend="both",
     )
-    ax_contour_p.set_xlabel('Time [s]')
-    ax_contour_p.set_ylabel('Position [m]')
-    ax_contour_p.set_title(f'{name} - Pipe Wall Temperature Field')
+    ax_contour_p.set_xlabel("Time [s]")
+    ax_contour_p.set_ylabel("Position [m]")
+    ax_contour_p.set_title(f"{name} - Pipe Wall Temperature Field")
     ax_contour_p.axhline(
         y=model.L,
-        color='red',
-        linestyle='--',
+        color="red",
+        linestyle="--",
         alpha=0.7,
-        label='collector end'
+        label="collector end",
     )
     ax_contour_p.legend()
     cbar_p = plt.colorbar(contour_p, ax=ax_contour_p)
-    cbar_p.set_label('Temperature [°C]')
+    cbar_p.set_label("Temperature [°C]")
 
     return fig1, fig2, fig3
 
@@ -602,20 +623,20 @@ def print_temp_profiles(model, t_eval, x_eval):
     t_vals = pd.Index(model.t)
     x_vals = pd.Index(model.x)
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TWO-TEMPERATURE MODEL ANALYSIS")
-    print("="*80)
+    print("=" * 80)
 
     # Temperature profiles at different times
     print("\nFluid and pipe wall temperature profiles at different times:")
     print(
-        f"{'Time [s]':<8} {'T_f Inlet [K]':<12} {'T_f End [K]':<10} "
-        f"{'T_p End [K]':<10} {'ΔT_f [K]':<10} {'T_p-T_f [K]':<12}"
+        f"{'Time [s]':<9} {'T_f Inlet [K]':<13} {'T_f End [K]':<12} "
+        f"{'T_p End [K]':<12} {'ΔT_f [K]':<11} {'T_p-T_f [K]':<12}"
     )
-    print("-" * 70)
+    print("-" * 79)
 
-    time_indeces = t_vals.get_indexer(t_eval, method='nearest')
-    pos_indeces = x_vals.get_indexer(x_eval, method='nearest')
+    time_indeces = t_vals.get_indexer(t_eval, method="nearest")
+    pos_indeces = x_vals.get_indexer(x_eval, method="nearest")
 
     for i, t in zip(time_indeces, t_eval):
         T_f_inlet = model.T_f[t_vals[i], x_vals[0]].value
@@ -624,8 +645,8 @@ def print_temp_profiles(model, t_eval, x_eval):
         delta_T_f = T_f_end - T_f_inlet
         temp_diff = T_p_end - T_f_end
         print(
-            f"{t:<8.2f} {T_f_inlet:<12.1f} {T_f_end:<10.1f} "
-            f"{T_p_end:<10.1f} {delta_T_f:<10.1f} {temp_diff:<12.1f}"
+            f"{t:<9.2f} {T_f_inlet:<13.1f} {T_f_end:<12.1f} "
+            f"{T_p_end:<12.1f} {delta_T_f:<11.1f} {temp_diff:<12.1f}"
         )
 
     # Temperature evolution at different positions
@@ -634,7 +655,7 @@ def print_temp_profiles(model, t_eval, x_eval):
         f"{'Position [m]':<12} {'Initial [K]':<12} {'Final [K]':<12} "
         f"{'Change [K]':<12}"
     )
-    print("-" * 50)
+    print("-" * 48)
 
     for i, x in zip(pos_indeces, x_eval):
         T_f_initial = model.T_f[t_vals[0], x_vals[i]].value
@@ -650,7 +671,7 @@ def print_temp_profiles(model, t_eval, x_eval):
         f"{'Position [m]':<12} {'Initial [K]':<12} {'Final [K]':<12} "
         f"{'Change [K]':<12}"
     )
-    print("-" * 50)
+    print("-" * 48)
 
     for i, x in zip(pos_indeces, x_eval):
         T_p_initial = model.T_p[t_vals[0], x_vals[i]].value
@@ -684,12 +705,10 @@ def print_temp_profiles(model, t_eval, x_eval):
     min_diff = min(all_temp_diffs)
     max_diff = max(all_temp_diffs)
 
-    print(
-        f"Fluid temperature range: {min_temp_f:.1f} K to {max_temp_f:.1f} K"
-    )
+    print(f"Fluid temperature range: {min_temp_f:.1f} K to {max_temp_f:.1f} K")
     print(
         f"Pipe wall temperature range: {min_temp_p:.1f} K to "
-        "{max_temp_p:.1f} K"
+        f"{{max_temp_p:.1f}} K"
     )
     print(
         f"Temperature difference range: {min_diff:.1f} K to {max_diff:.1f} K"
@@ -705,12 +724,12 @@ def print_temp_profiles(model, t_eval, x_eval):
         for i, x in enumerate(x_vals[1:-1], 1):  # Skip boundaries
             if i < len(x_vals) - 1:
                 # Approximate spatial gradients
-                dx = x_vals[i+1] - x_vals[i-1]
+                dx = x_vals[i + 1] - x_vals[i - 1]
 
                 # Fluid gradient
                 dT_f = (
-                    model.T_f[t, x_vals[i+1]].value
-                    - model.T_f[t, x_vals[i-1]].value
+                    model.T_f[t, x_vals[i + 1]].value
+                    - model.T_f[t, x_vals[i - 1]].value
                 )
                 gradient_f = abs(dT_f / dx) if dx > 0 else 0
                 if gradient_f > max_gradient_f:
@@ -719,7 +738,7 @@ def print_temp_profiles(model, t_eval, x_eval):
 
                 # Pipe wall gradient
                 dT_p = (
-                    model.T_p[t, x_vals[i+1]].value
+                    model.T_p[t, x_vals[i + 1]].value
                     - model.T_p[t, x_vals[i - 1]].value
                 )
                 gradient_p = abs(dT_p / dx) if dx > 0 else 0
@@ -756,7 +775,7 @@ def print_temp_profiles(model, t_eval, x_eval):
             if x <= model.L:  # Only in collector section
                 T_f = model.T_f[t, x].value
                 T_p = model.T_p[t, x].value
-                avg_temp_diff += (T_p - T_f)
+                avg_temp_diff += T_p - T_f
                 count += 1
 
     if count > 0:
@@ -775,4 +794,4 @@ def print_temp_profiles(model, t_eval, x_eval):
             f"{heat_transfer_rate:.0f} W/m"
         )
 
-    print("="*80)
+    print("=" * 80)

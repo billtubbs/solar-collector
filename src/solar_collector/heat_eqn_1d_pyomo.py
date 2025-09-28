@@ -1,4 +1,4 @@
-"""Simple 1D transient heat conduction example solved 
+"""Simple 1D transient heat conduction example solved
 with Pyomo DAE solver.
 
 Copied from J C Kantor's Pyomo documentation:
@@ -18,24 +18,23 @@ from pyomo.environ import (
     Objective,
     SolverFactory,
     ConcreteModel,
-    TransformationFactory
+    TransformationFactory,
 )
 
 assert shutil.which("ipopt") or os.path.isfile("ipopt")
 
 
 def model_plot(model, figsize=(10, 6)):
-    tgrid, rgrid = np.meshgrid(model.t, model.r, indexing='ij')
-    Tgrid = np.array([
-        model.T[t.item(), r.item()].value
-        for t, r in np.nditer([tgrid, rgrid])
-    ]).reshape(tgrid.shape)
+    tgrid, rgrid = np.meshgrid(model.t, model.r, indexing="ij")
+    Tgrid = np.array(
+        [model.T[t.item(), r.item()].value for t, r in np.nditer([tgrid, rgrid])]
+    ).reshape(tgrid.shape)
 
     fig = plt.figure(figsize=figsize)
-    ax = fig.add_subplot(1, 1, 1, projection='3d')
-    ax.set_xlabel('Distance r')
-    ax.set_ylabel('Time t')
-    ax.set_zlabel('Temperature T')
+    ax = fig.add_subplot(1, 1, 1, projection="3d")
+    ax.set_xlabel("Distance r")
+    ax.set_ylabel("Time t")
+    ax.set_zlabel("Temperature T")
     ax.plot_wireframe(rgrid, tgrid, Tgrid)
 
     return ax
@@ -62,20 +61,18 @@ def pde(m, t, r):
 model.obj = Objective(expr=1)
 
 model.ic = Constraint(
-    model.r,
-    rule=lambda m,
-    r: m.T[0, r] == 0 if r > 0 and r < 1 else Constraint.Skip
+    model.r, rule=lambda m, r: m.T[0, r] == 0 if r > 0 and r < 1 else Constraint.Skip
 )
 model.bc1 = Constraint(model.t, rule=lambda m, t: m.T[t, 1] == 1)
 model.bc2 = Constraint(model.t, rule=lambda m, t: m.dTdr[t, 0] == 0)
 
-TransformationFactory('dae.finite_difference').apply_to(
-    model, nfe=50, scheme='FORWARD', wrt=model.r
+TransformationFactory("dae.finite_difference").apply_to(
+    model, nfe=50, scheme="FORWARD", wrt=model.r
 )
-TransformationFactory('dae.finite_difference').apply_to(
-    model, nfe=50, scheme='FORWARD', wrt=model.t
+TransformationFactory("dae.finite_difference").apply_to(
+    model, nfe=50, scheme="FORWARD", wrt=model.t
 )
-SolverFactory('ipopt').solve(model, tee=True).write()
+SolverFactory("ipopt").solve(model, tee=True).write()
 
 model_plot(model)
 plt.tight_layout()

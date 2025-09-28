@@ -5,24 +5,23 @@ transfer in a solar collector pipe using Pyomo's differential-algebraic
 equation (DAE) framework. The model solves the advection-diffusion equation
 with heat input and convective losses.
 """
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import pyomo as pyo
-
-from pyomo.dae import DerivativeVar, ContinuousSet
+from pyomo.dae import ContinuousSet, DerivativeVar
 from pyomo.environ import (
-    Var,
-    Param,
+    ConcreteModel,
     Constraint,
     Objective,
+    Param,
     SolverFactory,
-    ConcreteModel,
     TransformationFactory,
+    Var,
 )
 
-from solar_collector.config import VAR_INFO, PLOT_COLORS
-
+from solar_collector.config import PLOT_COLORS, VAR_INFO
 
 # Constants
 ZERO_C = 273.15  # K
@@ -47,7 +46,7 @@ def create_pipe_flow_model(
     specific_heat=SPECIFIC_HEAT,
     T_ambient=ZERO_C + 20.0,
     pipe_diameter=PIPE_DIAMETER,
-    heat_transfer_coeff=HEAT_TRANSFER_COEFF
+    heat_transfer_coeff=HEAT_TRANSFER_COEFF,
 ):
     """
     Create Pyomo model for pipe flow heat transport PDE
@@ -117,17 +116,18 @@ def create_pipe_flow_model(
     model.d2Tdx2 = DerivativeVar(model.T, wrt=(model.x, model.x))
 
     # Physical parameters
-    model.alpha = Param(initialize=thermal_diffusivity)    # [m²/s]
-    model.rho = Param(initialize=fluid_density)      # [kg/m³]
-    model.cp = Param(initialize=specific_heat)       # [J/kg·K]
+    model.alpha = Param(initialize=thermal_diffusivity)  # [m²/s]
+    model.rho = Param(initialize=fluid_density)  # [kg/m³]
+    model.cp = Param(initialize=specific_heat)  # [J/kg·K]
 
     # Heat loss parameters
-    model.T_ambient = Param(initialize=T_ambient)    # [K]
-    model.D = Param(initialize=pipe_diameter)        # [m]
+    model.T_ambient = Param(initialize=T_ambient)  # [K]
+    model.D = Param(initialize=pipe_diameter)  # [m]
     model.h = Param(initialize=heat_transfer_coeff)  # [W/m²·K]
 
     # Default parameter functions if none provided
     if velocity_func is None:
+
         def velocity_func(t):
             return 0.2  # velocity [m/s]
             # if t > 3:
@@ -135,6 +135,7 @@ def create_pipe_flow_model(
             # return 0.2
 
     if heat_func is None:
+
         def heat_func(t):
             # Heat flux to pipe wall [W/m²]
             if t > 60.0 and t <= 240.0:
@@ -142,6 +143,7 @@ def create_pipe_flow_model(
             return 0.0
 
     if inlet_func is None:
+
         def inlet_func(t):
             return ZERO_C + 270.0
 
@@ -271,13 +273,13 @@ def solve_model(
 
     # Apply finite difference discretization
     # Use CENTRAL difference for spatial discretization (better accuracy)
-    TransformationFactory('dae.finite_difference').apply_to(
-        model, nfe=n_x, scheme='CENTRAL', wrt=model.x
+    TransformationFactory("dae.finite_difference").apply_to(
+        model, nfe=n_x, scheme="CENTRAL", wrt=model.x
     )
 
     # Temporal discretization (backward Euler for stability)
-    TransformationFactory('dae.finite_difference').apply_to(
-        model, nfe=n_t, scheme='BACKWARD', wrt=model.t
+    TransformationFactory("dae.finite_difference").apply_to(
+        model, nfe=n_t, scheme="BACKWARD", wrt=model.t
     )
 
     # Note: this outlet constraint can only be added after above
@@ -311,10 +313,10 @@ def solve_model(
             model.T[t, x].set_value(T_guess)
 
     # Configure solver with simpler options
-    solver = SolverFactory('ipopt')
-    solver.options['max_iter'] = max_iter
-    solver.options['tol'] = tol
-    solver.options['print_level'] = print_level
+    solver = SolverFactory("ipopt")
+    solver.options["max_iter"] = max_iter
+    solver.options["tol"] = tol
+    solver.options["print_level"] = print_level
 
     print("Solving with IPOPT...")
     results = solver.solve(model, tee=tee)
@@ -329,7 +331,7 @@ def plot_results(
     name="Oil Temp Model",
     var_info=VAR_INFO,
     colors=PLOT_COLORS,
-    figsize=(8, 7.5)
+    figsize=(8, 7.5),
 ):
     """
     Plot the temperature field solution with input functions visualization
@@ -373,12 +375,12 @@ def plot_results(
     x_vals = pd.Index(model.x)
 
     # Create meshgrid
-    T_grid, X_grid = np.meshgrid(t_vals, x_vals, indexing='ij')
+    T_grid, X_grid = np.meshgrid(t_vals, x_vals, indexing="ij")
 
     # Extract temperature values
-    temp_vals = np.array([
-        [pyo.environ.value(model.T[t, x]) for x in x_vals] for t in t_vals
-    ])
+    temp_vals = np.array(
+        [[pyo.environ.value(model.T[t, x]) for x in x_vals] for t in t_vals]
+    )
 
     # Extract input parameter values
     v_vals = [pyo.environ.value(model.v[t]) for t in t_vals]
@@ -396,30 +398,38 @@ def plot_results(
     fig1, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=figsize)
 
     # 1. Velocity time series
-    ax1.plot(t_vals, v_vals, color=colors['v'], linewidth=2)
-    ax1.set_ylabel('Velocity [m/s]')
-    ax1.set_title(f'{name} - {var_info["v"]["long_name"]}')
+    ax1.plot(t_vals, v_vals, color=colors["v"], linewidth=2)
+    ax1.set_ylabel("Velocity [m/s]")
+    ax1.set_title(f"{name} - {var_info['v']['long_name']}")
     ax1.grid(True, alpha=0.3)
 
     # 2. Heat input time series
-    ax2.plot(t_vals, np.array(q_vals)/1e3, color=colors['q_solar_conc'],
-             linewidth=2)
-    ax2.set_ylabel('Heat Input [kW/m²]')
-    ax2.set_title(f'{name} - {var_info["q_solar_conc"]["long_name"]}')
+    ax2.plot(
+        t_vals,
+        np.array(q_vals) / 1e3,
+        color=colors["q_solar_conc"],
+        linewidth=2,
+    )
+    ax2.set_ylabel("Heat Input [kW/m²]")
+    ax2.set_title(f"{name} - {var_info['q_solar_conc']['long_name']}")
     ax2.grid(True, alpha=0.3)
 
     # 3. Inlet temperature time series
-    ax3.plot(t_vals, np.array(T_inlet_vals) - ZERO_C, color=colors['T_f'],
-             linewidth=2)
-    ax3.set_ylabel('Inlet Temp [°C]')
-    ax3.set_title(f'{name} - {var_info["T_inlet"]["long_name"]}')
+    ax3.plot(
+        t_vals,
+        np.array(T_inlet_vals) - ZERO_C,
+        color=colors["T_f"],
+        linewidth=2,
+    )
+    ax3.set_ylabel("Inlet Temp [°C]")
+    ax3.set_title(f"{name} - {var_info['T_inlet']['long_name']}")
     ax3.grid(True, alpha=0.3)
 
     # 4. Outlet temperature time series
-    ax4.plot(t_vals, outlet_temps, color=colors['T_f'], linewidth=2)
-    ax4.set_xlabel('Time [s]')
-    ax4.set_ylabel('Outlet Temp [°C]')
-    ax4.set_title(f'{name} - Collector Oil Outlet Temperature')
+    ax4.plot(t_vals, outlet_temps, color=colors["T_f"], linewidth=2)
+    ax4.set_xlabel("Time [s]")
+    ax4.set_ylabel("Outlet Temp [°C]")
+    ax4.set_title(f"{name} - Collector Oil Outlet Temperature")
     ax4.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -432,22 +442,22 @@ def plot_results(
         X_grid.T,
         (temp_vals - ZERO_C).T,
         levels=temp_levels,
-        cmap='viridis',
-        extend='both'
+        cmap="viridis",
+        extend="both",
     )
-    ax_contour.set_xlabel('Time [s]')
-    ax_contour.set_ylabel('Position [m]')
-    ax_contour.set_title(f'{name} - Oil Temperature Field')
+    ax_contour.set_xlabel("Time [s]")
+    ax_contour.set_ylabel("Position [m]")
+    ax_contour.set_title(f"{name} - Oil Temperature Field")
     ax_contour.axhline(
         y=model.L,
-        color='red',
-        linestyle='--',
+        color="red",
+        linestyle="--",
         alpha=0.7,
-        label=f'collector end (x={model.L}m)'
+        label=f"collector end (x={model.L}m)",
     )
     ax_contour.legend()
     cbar = plt.colorbar(contour, ax=ax_contour)
-    cbar.set_label('Temperature [°C]')
+    cbar.set_label("Temperature [°C]")
 
     return fig1, fig2
 
@@ -463,9 +473,9 @@ def print_temp_profiles(model, t_eval, x_eval):
     t_vals = pd.Index(model.t)
     x_vals = pd.Index(model.x)
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEMPERATURE PROFILE ANALYSIS")
-    print("="*60)
+    print("=" * 60)
 
     # Temperature at different times along the pipe
     print("\nTemperature profiles at different times:")
@@ -475,8 +485,8 @@ def print_temp_profiles(model, t_eval, x_eval):
     )
     print("-" * 50)
 
-    time_indeces = t_vals.get_indexer(t_eval, method='nearest')
-    pos_indeces = x_vals.get_indexer(x_eval, method='nearest')
+    time_indeces = t_vals.get_indexer(t_eval, method="nearest")
+    pos_indeces = x_vals.get_indexer(x_eval, method="nearest")
     for i, t in zip(time_indeces, t_eval):  # Sample times
         T_inlet = model.T[t_vals[i], x_vals[0]].value
         T_penult = model.T[t_vals[i], x_vals[pos_indeces[-2]]].value
@@ -525,10 +535,10 @@ def print_temp_profiles(model, t_eval, x_eval):
         for i, x in enumerate(x_vals[1:-1], 1):  # Skip boundaries
             if i < len(x_vals) - 1:
                 # Approximate spatial gradient
-                dx = x_vals[i+1] - x_vals[i-1]
+                dx = x_vals[i + 1] - x_vals[i - 1]
                 dT = (
-                    model.T[t, x_vals[i+1]].value
-                    - model.T[t, x_vals[i-1]].value
+                    model.T[t, x_vals[i + 1]].value
+                    - model.T[t, x_vals[i - 1]].value
                 )
                 gradient = abs(dT / dx) if dx > 0 else 0
                 if gradient > max_gradient:
@@ -545,4 +555,4 @@ def print_temp_profiles(model, t_eval, x_eval):
     if max_gradient > 50:  # Arbitrary threshold for concern
         print("⚠️  WARNING: Large temp. gradients.")
 
-    print("="*60)
+    print("=" * 60)

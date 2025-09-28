@@ -37,10 +37,10 @@ VAR_INFO = {
 }
 
 PLOT_COLORS = {
-    'T_f': 'tab:blue',
-    'T_p': 'tab:orange',
-    'F': 'tab:green',
-    'v': 'tab:green',
-    'q_solar_conc': 'tab:purple',
-    'q_solar': 'tab:brown'
+    "T_f": "tab:blue",
+    "T_p": "tab:orange",
+    "F": "tab:green",
+    "v": "tab:green",
+    "q_solar_conc": "tab:purple",
+    "q_solar": "tab:brown",
 }
