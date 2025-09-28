@@ -21,6 +21,8 @@ from pyomo.environ import (
     TransformationFactory,
 )
 
+from solar_collector.config import VAR_INFO, PLOT_COLORS
+
 
 # Constants
 ZERO_C = 273.15  # K
@@ -87,7 +89,7 @@ def create_pipe_flow_model(
     model : pyomo.ConcreteModel
         Pyomo model with variables, parameters, and derivative variables
         defined.
-        
+
     Notes:
     ------
     - Creates extended domain: 0 to L_extended = L * 1.1
@@ -118,7 +120,7 @@ def create_pipe_flow_model(
     model.alpha = Param(initialize=thermal_diffusivity)    # [m²/s]
     model.rho = Param(initialize=fluid_density)      # [kg/m³]
     model.cp = Param(initialize=specific_heat)       # [J/kg·K]
-    
+
     # Heat loss parameters
     model.T_ambient = Param(initialize=T_ambient)    # [K]
     model.D = Param(initialize=pipe_diameter)        # [m]
@@ -257,10 +259,10 @@ def solve_model(
     results : pyomo solver results object
         Contains solver status, termination condition, and solution
         statistics.
-        
+
     Notes:
     ------
-    - Uses CENTRAL finite difference for spatial discretization 
+    - Uses CENTRAL finite difference for spatial discretization
       (2nd order accuracy)
     - Uses BACKWARD Euler for temporal discretization (stability)
     - Initializes time-varying parameters after discretization
@@ -321,7 +323,13 @@ def solve_model(
 
 
 def plot_results(
-    model, t_eval, x_eval, name="Oil Temp Model", figsize=(8, 7.5)
+    model,
+    t_eval,
+    x_eval,
+    name="Oil Temp Model",
+    var_info=VAR_INFO,
+    colors=PLOT_COLORS,
+    figsize=(8, 7.5)
 ):
     """
     Plot the temperature field solution with input functions visualization
@@ -381,32 +389,37 @@ def plot_results(
     end_idx = np.argmin(np.abs(np.array(x_vals) - model.L))
     outlet_temps = temp_vals[:, end_idx] - ZERO_C
 
+    # Define consistent temperature range for colorbars (0-400°C)
+    temp_levels = np.linspace(0, 400, 21)
+
     # FIGURE 1: Time series plots (4 rows, 1 column)
     fig1, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=figsize)
 
     # 1. Velocity time series
-    ax1.plot(t_vals, v_vals, 'b-', linewidth=2)
+    ax1.plot(t_vals, v_vals, color=colors['v'], linewidth=2)
     ax1.set_ylabel('Velocity [m/s]')
-    ax1.set_title(f'{name} - Fluid Velocity')
+    ax1.set_title(f'{name} - {var_info["v"]["long_name"]}')
     ax1.grid(True, alpha=0.3)
 
     # 2. Heat input time series
-    ax2.plot(t_vals, np.array(q_vals)/1e3, 'r-', linewidth=2)
+    ax2.plot(t_vals, np.array(q_vals)/1e3, color=colors['q_solar_conc'],
+             linewidth=2)
     ax2.set_ylabel('Heat Input [kW/m²]')
-    ax2.set_title(f'{name} - Solar Heat Input')
+    ax2.set_title(f'{name} - {var_info["q_solar_conc"]["long_name"]}')
     ax2.grid(True, alpha=0.3)
 
     # 3. Inlet temperature time series
-    ax3.plot(t_vals, np.array(T_inlet_vals) - ZERO_C, 'g-', linewidth=2)
+    ax3.plot(t_vals, np.array(T_inlet_vals) - ZERO_C, color=colors['T_f'],
+             linewidth=2)
     ax3.set_ylabel('Inlet Temp [°C]')
-    ax3.set_title(f'{name} - Oil Inlet Temperature')
+    ax3.set_title(f'{name} - {var_info["T_inlet"]["long_name"]}')
     ax3.grid(True, alpha=0.3)
 
     # 4. Outlet temperature time series
-    ax4.plot(t_vals, outlet_temps, 'm-', linewidth=2)
+    ax4.plot(t_vals, outlet_temps, color=colors['T_f'], linewidth=2)
     ax4.set_xlabel('Time [s]')
     ax4.set_ylabel('Outlet Temp [°C]')
-    ax4.set_title(f'{name} - Collector Outlet Temperature')
+    ax4.set_title(f'{name} - Collector Oil Outlet Temperature')
     ax4.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -415,11 +428,11 @@ def plot_results(
     fig2, ax_contour = plt.subplots(1, 1, figsize=figsize)
 
     contour = ax_contour.contourf(
-        T_grid.T, 
-        X_grid.T, 
-        (temp_vals - ZERO_C).T, 
-        levels=20, 
-        cmap='viridis', 
+        T_grid.T,
+        X_grid.T,
+        (temp_vals - ZERO_C).T,
+        levels=temp_levels,
+        cmap='viridis',
         extend='both'
     )
     ax_contour.set_xlabel('Time [s]')
@@ -436,8 +449,6 @@ def plot_results(
     cbar = plt.colorbar(contour, ax=ax_contour)
     cbar.set_label('Temperature [°C]')
 
-    plt.tight_layout()
-
     return fig1, fig2
 
 
@@ -451,7 +462,7 @@ def print_temp_profiles(model, t_eval, x_eval):
     # Extract solution data
     t_vals = pd.Index(model.t)
     x_vals = pd.Index(model.x)
-    
+
     print("\n" + "="*60)
     print("TEMPERATURE PROFILE ANALYSIS")
     print("="*60)
