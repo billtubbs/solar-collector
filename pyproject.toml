@@ -17,6 +17,7 @@ dependencies = [
     "pandas",
     "tqdm",
     "pyyaml",
+    "pytest",
     "ipykernel",
     "ipython"
 ]
@@ -41,3 +42,6 @@ line-ending = "auto"
 [tool.ruff.lint]
 select = ["E", "F", "W", "C90"]
 ignore = ["E501"]  # Line too long (handled by formatter)
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

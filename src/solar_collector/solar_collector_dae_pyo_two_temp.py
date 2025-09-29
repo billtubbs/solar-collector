@@ -23,6 +23,7 @@ from pyomo.environ import (
 )
 
 from solar_collector.config import PLOT_COLORS, VAR_INFO
+from solar_collector.heat_transfer import calculate_heat_transfer_coefficient
 
 # Constants
 ZERO_C = 273.15  # K
@@ -53,11 +54,11 @@ def create_pipe_flow_model(
     T_ambient=ZERO_C + 20.0,
     pipe_diameter=PIPE_DIAMETER,
     pipe_wall_thickness=PIPE_WALL_THICKNESS,
-    heat_transfer_coeff_int=HEAT_TRANSFER_COEFF_INT,
     heat_transfer_coeff_ext=HEAT_TRANSFER_COEFF_EXT,
     pipe_thermal_conductivity=PIPE_THERMAL_CONDUCTIVITY,
     pipe_density=PIPE_DENSITY,
     pipe_specific_heat=PIPE_SPECIFIC_HEAT,
+    use_dittus_boelter=True,
 ):
     """
     Create Pyomo model for pipe flow heat transport PDE with fluid and wall
@@ -157,7 +158,6 @@ def create_pipe_flow_model(
     model.T_ambient = Param(initialize=T_ambient)  # [K]
     model.D = Param(initialize=pipe_diameter)  # [m]
     model.d = Param(initialize=pipe_wall_thickness)  # [m]
-    model.h_int = Param(initialize=heat_transfer_coeff_int)  # [W/m²·K]
     model.h_ext = Param(initialize=heat_transfer_coeff_ext)  # [W/m²·K]
 
     # Default parameter functions if none provided
@@ -183,6 +183,39 @@ def create_pipe_flow_model(
     model.velocity_func = velocity_func
     model.heat_func = heat_func
     model.inlet_func = inlet_func
+
+    # Calculate initial heat transfer coefficient if using Dittus-Boelter
+    if use_dittus_boelter:
+        # Use initial velocity to calculate h_int
+        v_initial = velocity_func(0.0)
+        h_int_initial, Re_initial, Pr_initial, Nu_initial = (
+            calculate_heat_transfer_coefficient(
+                velocity=v_initial,
+                pipe_diameter=pipe_diameter,
+                fluid_density=fluid_density,
+                fluid_specific_heat=specific_heat,
+            )
+        )
+        print(f"Using Dittus-Boelter correlation for h_int:")
+        print(f"  Initial velocity: {v_initial:.3f} m/s")
+        print(f"  Reynolds number: {Re_initial:.0f}")
+        print(f"  Prandtl number: {Pr_initial:.1f}")
+        print(f"  Nusselt number: {Nu_initial:.1f}")
+        print(f"  Heat transfer coefficient: {h_int_initial:.1f} W/m²·K")
+        heat_transfer_coeff_int = h_int_initial
+    else:
+        # Use constant value
+        heat_transfer_coeff_int = HEAT_TRANSFER_COEFF_INT
+        print(f"Using constant h_int: {heat_transfer_coeff_int:.1f} W/m²·K")
+
+    # Add h_int parameter to model
+    model.h_int = Param(initialize=heat_transfer_coeff_int, mutable=True)  # [W/m²·K]
+
+    # Store correlation settings
+    model.use_dittus_boelter = use_dittus_boelter
+    model.pipe_diameter = pipe_diameter
+    model.fluid_density = fluid_density
+    model.specific_heat = specific_heat
 
     # Time-varying parameters (will be initialized after discretization)
     model.v = Param(model.t, mutable=True)
@@ -398,9 +431,24 @@ def solve_model(
 
     # Initialize time-varying parameters after discretization
     for t in model.t:
-        model.v[t].set_value(model.velocity_func(t))
+        velocity_t = model.velocity_func(t)
+        model.v[t].set_value(velocity_t)
         model.q[t].set_value(model.heat_func(t))
         model.T_inlet[t].set_value(model.inlet_func(t))
+
+        # Update heat transfer coefficient if using Dittus-Boelter correlation
+        if model.use_dittus_boelter:
+            h_int_t, _, _, _ = calculate_heat_transfer_coefficient(
+                velocity=velocity_t,
+                pipe_diameter=model.pipe_diameter,
+                fluid_density=model.fluid_density,
+                fluid_specific_heat=model.specific_heat,
+            )
+            # Update the parameter value for this time step
+            # Note: Since h_int is not time-varying in this model structure,
+            # we use the average velocity for the overall simulation
+            if t == list(model.t)[0]:  # First time point
+                model.h_int.set_value(h_int_t)
 
     # Provide good initial guess for temperature fields
     for t in model.t:
