@@ -12,6 +12,12 @@ This project provides dynamic simulation capabilities for parabolic mirror solar
 
 Requires IPOPT.  See installation instructions [here](https://coin-or.github.io/Ipopt/INSTALL.html).
 
+Or install the Anaconda distribution manually:
+
+```bash
+conda install -c conda-forge ipopt
+```
+
 
 ### Create Python Environment
 

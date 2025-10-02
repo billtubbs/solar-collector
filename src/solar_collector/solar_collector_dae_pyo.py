@@ -29,7 +29,7 @@ ZERO_C = 273.15  # K
 THERMAL_DIFFUSIVITY = 0.25  # m²/s
 FLUID_DENSITY = 800  # kg/m³
 SPECIFIC_HEAT = 2000.0  # J/kg·K
-HEAT_TRANSFER_COEFF = 20.0  # W/m²·K
+HEAT_TRANSFER_COEFF_EXT = 10.0  # W/m²·K
 PIPE_DIAMETER = 0.07  # m
 COLLECTOR_LENGTH = 100.0  # m
 
@@ -81,7 +81,7 @@ def create_pipe_flow_model(
         Ambient temperature [K] for convective heat loss
     pipe_diameter : float, default=0.05
         Inner pipe diameter [m] for heat loss calculations
-    heat_transfer_coeff : float, default=10.0
+    heat_transfer_coeff_ext : float, default=10.0
         Convective heat transfer coefficient h [W/m²·K]
 
     Returns:
@@ -170,14 +170,14 @@ def create_pipe_flow_model(
         print(f"  Prandtl number: {Pr_initial:.1f}")
         print(f"  Nusselt number: {Nu_initial:.1f}")
         print(f"  Heat transfer coefficient: {h_initial:.1f} W/m²·K")
-        heat_transfer_coeff = h_initial
+        heat_transfer_coeff_ext = h_initial
     else:
         # Use constant value
-        heat_transfer_coeff = HEAT_TRANSFER_COEFF
-        print(f"Using constant h: {heat_transfer_coeff:.1f} W/m²·K")
+        heat_transfer_coeff_ext = HEAT_TRANSFER_COEFF_EXT
+        print(f"Using constant h: {heat_transfer_coeff_ext:.1f} W/m²·K")
 
     # Add h parameter to model
-    model.h = Param(initialize=heat_transfer_coeff, mutable=True)  # [W/m²·K]
+    model.h = Param(initialize=heat_transfer_coeff_ext, mutable=True)  # [W/m²·K]
 
     # Store correlation settings
     model.use_dittus_boelter = use_dittus_boelter
