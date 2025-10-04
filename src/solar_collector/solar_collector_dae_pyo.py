@@ -129,7 +129,7 @@ def create_pipe_flow_model(
     if velocity_func is None:
 
         def velocity_func(t):
-            return 0.2  # velocity [m/s]
+            return 0.5  # velocity [m/s]
             # if t > 3:
             #     return 0.4
             # return 0.2
