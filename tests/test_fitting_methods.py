@@ -4,6 +4,8 @@ Pytest test suite for CasADi-based fitting methods in the
 FittedPropertyCorrelation classes
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,13 +16,15 @@ from src.fluids import (
     PolynomialCorrelation,
 )
 
+DATA_DIR = "data/properties/fluids"
+FILENAME = "SYLTHERM800_data.csv"
+
 
 @pytest.fixture
 def syltherm_data():
     """Load SYLTHERM 800 manufacturer data fixture"""
     try:
-        df = pd.read_csv("data/properties/fluids/SYLTHERM800_data.csv")
-
+        df = pd.read_csv(os.path.join(DATA_DIR, FILENAME))
         data = {
             "T_K": df["Temperature_C"].values + 273.15,
             "T_C": df["Temperature_C"].values,
@@ -33,31 +37,29 @@ def syltherm_data():
             "vapor_pressure": df["Vapor_Pressure_kPa"].values
             * 1000,  # Convert to Pa
         }
-
         return data
+
     except FileNotFoundError:
         pytest.skip(
-            "SYLTHERM800_data.csv not found. Check file exists in "
-            "data/properties/fluids/."
+            f"{FILENAME!r} not found. Check file exists in {DATA_DIR}."
         )
+        return None
 
 
 @pytest.fixture
-def density_fitting_params():
+def density_fit_params():
     """Fitting parameters for density correlation"""
     return {
         "bounds": {
-            "a0": (800, 1200),  # Intercept
-            "a1": (-2, 2),  # Linear term
-            "a2": (-0.01, 0.01),  # Quadratic term
-            "a3": (-1e-5, 1e-5),  # Cubic term
+            "a0": (800, 1400),  # Intercept
+            "a1": (-2, 2),  # Slope term
         },
-        "initial_guess": {"a0": 1000, "a1": -0.5, "a2": 0, "a3": 0},
+        "initial_guess": {"a0": 1200, "a1": -0.5},
     }
 
 
 @pytest.fixture
-def viscosity_fitting_params():
+def viscosity_fit_params():
     """Fitting parameters for viscosity correlation"""
     return {
         "bounds": {
@@ -70,7 +72,7 @@ def viscosity_fitting_params():
 
 
 @pytest.fixture
-def vapor_pressure_fitting_params():
+def vapor_pressure_fit_params():
     """Fitting parameters for vapor pressure correlation"""
     return {
         "bounds": {
@@ -86,7 +88,7 @@ class TestPolynomialCorrelationFitting:
     """Test polynomial correlation fitting methods"""
 
     def test_polynomial_fitting_density(
-        self, syltherm_data, density_fitting_params
+        self, syltherm_data, density_fit_params
     ):
         """Test polynomial correlation fitting with density data"""
         T_data = syltherm_data["T_K"]
@@ -104,8 +106,8 @@ class TestPolynomialCorrelationFitting:
         fit_results = poly_corr.fit(
             T_data,
             y_data,
-            bounds=density_fitting_params["bounds"],
-            initial_guess=density_fitting_params["initial_guess"],
+            bounds=density_fit_params["bounds"],
+            initial_guess=density_fit_params["initial_guess"],
         )
 
         # Assertions
@@ -180,7 +182,7 @@ class TestExponentialCorrelationFitting:
     """Test exponential correlation fitting methods"""
 
     def test_exponential_fitting_viscosity(
-        self, syltherm_data, viscosity_fitting_params
+        self, syltherm_data, viscosity_fit_params
     ):
         """Test exponential correlation fitting with viscosity data"""
         T_data = syltherm_data["T_K"]
@@ -200,8 +202,8 @@ class TestExponentialCorrelationFitting:
         fit_results = exp_corr.fit(
             T_data,
             y_data,
-            bounds=viscosity_fitting_params["bounds"],
-            initial_guess=viscosity_fitting_params["initial_guess"],
+            bounds=viscosity_fit_params["bounds"],
+            initial_guess=viscosity_fit_params["initial_guess"],
         )
 
         # Assertions
@@ -244,7 +246,7 @@ class TestAntoineCorrelationFitting:
     """Test Antoine correlation fitting methods"""
 
     def test_antoine_fitting_setup(
-        self, syltherm_data, vapor_pressure_fitting_params
+        self, syltherm_data, vapor_pressure_fit_params
     ):
         """Test Antoine correlation setup and basic functionality"""
         T_data = syltherm_data["T_K"]
@@ -271,8 +273,8 @@ class TestAntoineCorrelationFitting:
             fit_results = antoine_corr.fit(
                 T_data,
                 y_data,
-                bounds=vapor_pressure_fitting_params["bounds"],
-                initial_guess=vapor_pressure_fitting_params["initial_guess"],
+                bounds=vapor_pressure_fit_params["bounds"],
+                initial_guess=vapor_pressure_fit_params["initial_guess"],
             )
 
             # If fitting succeeds, check basic structure
@@ -367,6 +369,29 @@ class TestFittingFramework:
         assert isinstance(fit_results["fitted_parameters"], dict)
         assert isinstance(fit_results["correlation_type"], str)
         assert isinstance(fit_results["n_parameters"], int)
+
+    def test_plot_correlation_method(self, syltherm_data):
+        """Test that plot_correlation method works correctly"""
+        T_data = syltherm_data["T_K"][:20]  # Use subset for faster test
+        y_data = syltherm_data["density"][:20]
+
+        poly_corr = PolynomialCorrelation(
+            [1000, -0.8, 0], T_data.min(), T_data.max(), "Test_Plotting"
+        )
+
+        # Test plotting without saving (just check it doesn't crash)
+        import matplotlib
+
+        matplotlib.use("Agg")  # Use non-interactive backend for testing
+
+        fig, axes = poly_corr.plot_correlation(
+            T_data=T_data,
+            y_data=y_data,
+            title="Test Plot",
+            show_residuals=True,
+        )
+        assert isinstance(fig, matplotlib.figure.Figure)
+        assert isinstance(axes, np.ndarray)
 
 
 if __name__ == "__main__":

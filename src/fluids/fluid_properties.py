@@ -191,6 +191,144 @@ class FittedPropertyCorrelation(PropertyCorrelation):
         """Update correlation parameters from fitted values"""
         pass
 
+    def plot_correlation(
+        self,
+        T_data: np.ndarray,
+        y_data: np.ndarray,
+        title: str = None,
+        xlabel: str = "Temperature [°C]",
+        ylabel: str = "Property Value",
+        s: float = 25,
+        show_residuals: bool = True,
+        figsize=None,
+    ) -> tuple:
+        """
+        Plot correlation model predictions versus experimental data
+
+        Parameters:
+        -----------
+        T_data : np.ndarray
+            Temperature data points [K]
+        y_data : np.ndarray
+            Property data points
+        title : str, optional
+            Plot title (default: uses correlation name)
+        xlabel : str, optional
+            X-axis label (default: "Temperature [°C]")
+        ylabel : str, optional
+            Y-axis label (default: "Property Value")
+        show_residuals : bool, optional
+            Whether to show residuals subplot (default: True)
+
+        Returns:
+        --------
+        tuple
+            (fig, axes) - matplotlib figure and axes objects
+            If show_residuals=True: axes is (ax1, ax2) tuple
+            If show_residuals=False: axes is single axis object
+        """
+        import matplotlib.pyplot as plt
+
+        # Convert inputs to numpy arrays
+        T_data = np.array(T_data)
+        y_data = np.array(y_data)
+        T_C_data = T_data - 273.15
+
+        # Generate model predictions
+        y_pred = self.evaluate(T_data)
+
+        # Calculate statistics
+        residuals = y_data - y_pred
+        rmse = np.sqrt(np.mean(residuals**2))
+        mae = np.mean(np.abs(residuals))
+        mape = (
+            np.mean(np.abs(residuals / y_data)) * 100
+            if np.all(y_data != 0)
+            else float("inf")
+        )
+
+        # R-squared
+        ss_res = np.sum(residuals**2)
+        ss_tot = np.sum((y_data - np.mean(y_data)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else float("-inf")
+
+        # Create smooth curve for model
+        T_smooth = np.linspace(T_data.min(), T_data.max(), 200)
+        T_C_smooth = T_smooth - 273.15
+        y_smooth = self.evaluate(T_smooth)
+
+        # Set up plot
+        if show_residuals:
+            if figsize is None:
+                figsize = (7, 4)
+            fig, axes = plt.subplots(2, 1, sharex=True, figsize=figsize)
+            ax1, ax2 = axes
+        else:
+            if figsize is None:
+                figsize = (7, 2.5)
+            fig, axes = plt.subplots(1, 1, figsize=figsize)
+            ax1 = axes
+
+        # Main plot: data vs model
+        ax = ax1
+        ax.scatter(
+            T_C_data,
+            y_data,
+            color="C0",
+            alpha=0.7,
+            s=s,
+            label="Data",
+            zorder=3,
+        )
+        ax.plot(
+            T_C_smooth,
+            y_smooth,
+            color="C1",
+            linewidth=2,
+            label="Correlation Model",
+            zorder=2,
+        )
+
+        # Formatting
+        if not show_residuals:
+            ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+
+        # Title
+        if title is None:
+            title = f"{getattr(self, 'name', 'Correlation')} - Model vs Data"
+        ax.set_title(title)
+
+        # Add statistics text box
+        stats_text = (
+            f"R² = {r_squared:.4f}\n"
+            f"RMSE = {rmse:.3e}\n"
+            f"MAE = {mae:.3e}\n"
+            f"MAPE = {mape:.1f}%"
+        )
+        ax.text(
+            0.02,
+            0.98,
+            stats_text,
+            transform=ax.transAxes,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
+        )
+
+        # Residuals plot (using valid data only)
+        if show_residuals:
+            ax = ax2
+            ax.scatter(T_C_data, residuals, color="C0", alpha=0.7, s=s)
+            ax.axhline(y=0, color="C1", linestyle="--")
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel("Residuals (Data - Model)")
+            ax.grid(True, alpha=0.3)
+            ax.set_title("Residuals Plot")
+
+        return fig, axes
+
 
 class PolynomialCorrelation(FittedPropertyCorrelation):
     """
@@ -448,7 +586,7 @@ class ExponentialCorrelation(FittedPropertyCorrelation):
 
 class AntoineCorrelation(FittedPropertyCorrelation):
     """
-    Antoine equation for vapor pressure: log10(P) = A + B/(T + C)
+    Antoine equation for vapor pressure: log10(P) = A - B/(T + C)
 
     This is a classical form of DIPPR correlation equation 101:
     Y = exp(A + B/T + C*ln(T) + D*T^E)
@@ -487,8 +625,9 @@ class AntoineCorrelation(FittedPropertyCorrelation):
     ) -> Union[float, np.ndarray]:
         # Convert from Kelvin to Celsius for Antoine equation
         T_C = T - 273.15
-        log_P = self.A - self.B / (self.C + T_C)
-        return 10**log_P
+        log10_P = self.A - self.B / (self.C + T_C)
+
+        return 10**log10_P
 
     def get_valid_range(self) -> Tuple[float, float]:
         return (self.T_min, self.T_max)
@@ -551,19 +690,26 @@ class AntoineCorrelation(FittedPropertyCorrelation):
         B = ca.MX.sym("B")
         C = ca.MX.sym("C")
 
+        # Filter out zero vapor pressure data points (due to rounding)
+        # Antoine equation requires log(P), so P must be > 0
+        valid_mask = y_data > 0
+        T_data_filtered = T_data[valid_mask]
+        y_data_filtered = y_data[valid_mask]
+        weights_filtered = weights[valid_mask] if weights is not None else None
+
         # Define Antoine model function
         def antoine_model(T, A_param, B_param, C_param):
             T_C = T - 273.15  # Convert to Celsius
-            log_P = A_param - B_param / (C_param + T_C)
-            return 10**log_P
+            log10_P = A_param - B_param / (C_param + T_C)
+            return 10**log10_P
 
-        # Use shared fitting solver
+        # Use shared fitting solver with filtered data
         optimal_params, fit_stats = _shared_fitting_solver(
             antoine_model,
             [A, B, C],
-            T_data,
-            y_data,
-            weights,
+            T_data_filtered,
+            y_data_filtered,
+            weights_filtered,
             bounds,
             initial_guess,
         )
@@ -1121,7 +1267,7 @@ class FluidProperties:
                 T_C_data,
                 exp_data,
                 "bo",
-                label="Experimental Data",
+                label="Data",
                 markersize=6,
                 alpha=0.7,
             )
