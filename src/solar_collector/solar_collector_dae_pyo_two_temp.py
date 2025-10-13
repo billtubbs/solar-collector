@@ -196,7 +196,7 @@ def create_pipe_flow_model(
                 fluid_specific_heat=specific_heat,
             )
         )
-        print(f"Using Dittus-Boelter correlation for h_int:")
+        print("Using Dittus-Boelter correlation for h_int:")
         print(f"  Initial velocity: {v_initial:.3f} m/s")
         print(f"  Reynolds number: {Re_initial:.0f}")
         print(f"  Prandtl number: {Pr_initial:.1f}")
@@ -209,7 +209,9 @@ def create_pipe_flow_model(
         print(f"Using constant h_int: {heat_transfer_coeff_int:.1f} W/m²·K")
 
     # Add h_int parameter to model
-    model.h_int = Param(initialize=heat_transfer_coeff_int, mutable=True)  # [W/m²·K]
+    model.h_int = Param(
+        initialize=heat_transfer_coeff_int, mutable=True
+    )  # [W/m²·K]
 
     # Store correlation settings
     model.use_dittus_boelter = use_dittus_boelter
