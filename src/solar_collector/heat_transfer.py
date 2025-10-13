@@ -11,8 +11,8 @@ DEFAULT_FLUID_DENSITY = 800.0  # kg/m³
 DEFAULT_FLUID_SPECIFIC_HEAT = 2000.0  # J/kg·K
 DEFAULT_FLUID_THERMAL_CONDUCTIVITY = 0.12  # W/m·K (typical thermal oil)
 DEFAULT_FLUID_DYNAMIC_VISCOSITY = 0.01  # Pa·s (typical thermal oil)
-
 NUSSELT_NUMBER_LAMINAR = 4.36
+
 
 def calculate_heat_transfer_coefficient_turbulent(
     velocity,
@@ -88,18 +88,14 @@ def calculate_heat_transfer_coefficient_turbulent(
 
     # Heat transfer coefficient
     h = calculate_heat_transfer_coefficient_nusselt(
-        pipe_diameter,
-        fluid_thermal_conductivity,
-        Nu
+        pipe_diameter, fluid_thermal_conductivity, Nu
     )
 
     return h, Re, Pr, Nu
 
 
 def calculate_heat_transfer_coefficient_nusselt(
-    pipe_diameter,
-    fluid_thermal_conductivity,
-    Nu=4.36
+    pipe_diameter, fluid_thermal_conductivity, Nu=4.36
 ):
     """
     Calculate internal heat transfer coefficient for laminar flow in a
@@ -138,7 +134,9 @@ def calculate_heat_transfer_coefficient_nusselt(
     return h
 
 
-def calculate_reynolds_number(velocity, pipe_diameter, fluid_density, fluid_viscosity):
+def calculate_reynolds_number(
+    velocity, pipe_diameter, fluid_density, fluid_viscosity
+):
     """
     Calculate Reynolds number for pipe flow
 
@@ -161,7 +159,9 @@ def calculate_reynolds_number(velocity, pipe_diameter, fluid_density, fluid_visc
     return fluid_density * velocity * pipe_diameter / fluid_viscosity
 
 
-def calculate_prandtl_number(fluid_viscosity, fluid_specific_heat, fluid_thermal_conductivity):
+def calculate_prandtl_number(
+    fluid_viscosity, fluid_specific_heat, fluid_thermal_conductivity
+):
     """
     Calculate Prandtl number for fluid
 
@@ -197,14 +197,16 @@ def get_flow_regime(reynolds_number):
         Flow regime: 'laminar', 'transitional', or 'turbulent'
     """
     if reynolds_number < 2300:
-        return 'laminar'
+        return "laminar"
     elif reynolds_number < 4000:
-        return 'transitional'
+        return "transitional"
     else:
-        return 'turbulent'
+        return "turbulent"
 
 
-def estimate_pressure_drop(velocity, pipe_length, pipe_diameter, fluid_density, fluid_viscosity):
+def estimate_pressure_drop(
+    velocity, pipe_length, pipe_diameter, fluid_density, fluid_viscosity
+):
     """
     Estimate pressure drop using Darcy-Weisbach equation
 
@@ -228,7 +230,9 @@ def estimate_pressure_drop(velocity, pipe_length, pipe_diameter, fluid_density, 
     friction_factor : float
         Darcy friction factor [-]
     """
-    Re = calculate_reynolds_number(velocity, pipe_diameter, fluid_density, fluid_viscosity)
+    Re = calculate_reynolds_number(
+        velocity, pipe_diameter, fluid_density, fluid_viscosity
+    )
 
     # Friction factor correlation
     if Re < 2300:  # Laminar flow
@@ -237,6 +241,8 @@ def estimate_pressure_drop(velocity, pipe_length, pipe_diameter, fluid_density, 
         f = 0.316 / Re**0.25
 
     # Darcy-Weisbach equation
-    pressure_drop = f * (pipe_length / pipe_diameter) * (fluid_density * velocity**2 / 2)
+    pressure_drop = (
+        f * (pipe_length / pipe_diameter) * (fluid_density * velocity**2 / 2)
+    )
 
     return pressure_drop, f

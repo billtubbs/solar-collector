@@ -5,7 +5,10 @@ Test script for Dittus-Boelter enhanced Pyomo models
 
 import pytest
 
-from solar_collector.heat_transfer import calculate_heat_transfer_coefficient
+from solar_collector.heat_transfer import (
+    calculate_heat_transfer_coefficient_nusselt,
+    calculate_heat_transfer_coefficient_turbulent,
+)
 from solar_collector.solar_collector_dae_pyo import (
     add_pde_constraints as add_single_constraints,
 )
@@ -32,25 +35,26 @@ def test_heat_transfer_coefficient_calculations():
     expected_regimes = ["laminar", "laminar", "laminar", "turbulent"]
 
     for v, expected_regime in zip(velocities, expected_regimes):
-        h, re, pr, nu = calculate_heat_transfer_coefficient(
-            velocity=v,
-            pipe_diameter=0.07,
-        )
-
-        # Basic sanity checks
-        assert h > 0, f"Heat transfer coefficient should be positive, got {h}"
-        assert re > 0, f"Reynolds number should be positive, got {re}"
-        assert pr > 0, f"Prandtl number should be positive, got {pr}"
-        assert nu > 0, f"Nusselt number should be positive, got {nu}"
-
         # Check flow regime transition
         if expected_regime == "laminar":
-            assert re <= 4000, f"Expected laminar flow but Re={re} > 4000"
-            assert nu == pytest.approx(4.36, rel=1e-3), (
-                f"Laminar Nu should be 4.36, got {nu}"
+            h = calculate_heat_transfer_coefficient_nusselt(
+                pipe_diameter=0.07, fluid_thermal_conductivity=0.12
+            )
+            # Basic sanity checks
+            assert h > 0, (
+                f"Heat transfer coefficient should be positive, got {h}"
             )
         else:
+            h, re, pr, nu = calculate_heat_transfer_coefficient_turbulent(
+                velocity=v,
+                pipe_diameter=0.07,
+                fluid_density=800.0,
+                fluid_viscosity=0.01,
+                fluid_thermal_conductivity=0.12,
+                fluid_specific_heat=2000.0,
+            )
             assert re > 4000, f"Expected turbulent flow but Re={re} <= 4000"
+            assert pr > 0, f"Prandtl number should be positive, got {pr}"
             assert nu > 4.36, f"Turbulent Nu should be > 4.36, got {nu}"
 
 
@@ -59,7 +63,6 @@ def test_single_temperature_model():
     # Create model with Dittus-Boelter correlation
     model = create_single_temp_model(
         t_final=60.0,  # Short simulation
-        use_dittus_boelter=True,
     )
 
     # Add constraints
@@ -103,15 +106,18 @@ def test_two_temperature_model():
 def test_heat_transfer_coefficient_comparison():
     """Test that turbulent flow gives higher heat transfer than laminar"""
     # Laminar flow case
-    h_laminar, _, _, _ = calculate_heat_transfer_coefficient(
-        velocity=0.1,
-        pipe_diameter=0.07,
+    h_laminar = calculate_heat_transfer_coefficient_nusselt(
+        pipe_diameter=0.07, fluid_thermal_conductivity=0.12
     )
 
     # Turbulent flow case
-    h_turbulent, _, _, _ = calculate_heat_transfer_coefficient(
+    h_turbulent, _, _, _ = calculate_heat_transfer_coefficient_turbulent(
         velocity=1.0,
         pipe_diameter=0.07,
+        fluid_density=800.0,
+        fluid_viscosity=0.01,
+        fluid_thermal_conductivity=0.12,
+        fluid_specific_heat=2000.0,
     )
 
     # Turbulent should have much higher heat transfer
