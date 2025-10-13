@@ -23,14 +23,18 @@ from pyomo.environ import (
 )
 
 from solar_collector.config import PLOT_COLORS, VAR_INFO
-from solar_collector.heat_transfer import calculate_heat_transfer_coefficient
+from solar_collector.heat_transfer import (
+    calculate_heat_transfer_coefficient_turbulent
+)
 
 # Constants
 ZERO_C = 273.15  # K
 THERMAL_DIFFUSIVITY = 0.25  # m²/s
 FLUID_DENSITY = 800  # kg/m³
-SPECIFIC_HEAT = 2000.0  # J/kg·K
-HEAT_TRANSFER_COEFF_INT = 200.0  # W/m²·K (internal, pipe-to-fluid)
+FLUID_DYNAMIC_VISCOSITY = 0.001  # Pa·s
+FLUID_THERMAL_CONDUCTIVITY = 0.12  # W/m·K
+FLUID_SPECIFIC_HEAT = 2000.0  # J/kg·K
+HEAT_TRANSFER_COEFF_INT = 10.0  # W/m²·K (internal, pipe-to-fluid)
 HEAT_TRANSFER_COEFF_EXT = 20.0  # W/m²·K (external, pipe-to-ambient)
 PIPE_DIAMETER = 0.07  # m
 PIPE_WALL_THICKNESS = 0.006  # m
@@ -50,7 +54,9 @@ def create_pipe_flow_model(
     inlet_func=None,
     thermal_diffusivity=THERMAL_DIFFUSIVITY,
     fluid_density=FLUID_DENSITY,
-    specific_heat=SPECIFIC_HEAT,
+    fluid_dynamic_viscosity=FLUID_DYNAMIC_VISCOSITY,
+    fluid_thermal_conductivity=FLUID_THERMAL_CONDUCTIVITY,
+    fluid_specific_heat=FLUID_SPECIFIC_HEAT,
     T_ambient=ZERO_C + 20.0,
     pipe_diameter=PIPE_DIAMETER,
     pipe_wall_thickness=PIPE_WALL_THICKNESS,
@@ -86,7 +92,9 @@ def create_pipe_flow_model(
         Fluid thermal diffusivity α [m²/s]
     fluid_density : float, default=FLUID_DENSITY
         Fluid density ρ_f [kg/m³]
-    specific_heat : float, default=SPECIFIC_HEAT
+    fluid_dynamic_viscosity : float
+    fluid_thermal_conductivity : float
+    fluid_specific_heat : float, default=FLUID_SPECIFIC_HEAT
         Fluid specific heat capacity cp_f [J/kg·K]
     T_ambient : float, default=ZERO_C + 20.0
         Ambient temperature [K] for convective heat loss
@@ -147,7 +155,9 @@ def create_pipe_flow_model(
     # Fluid properties
     model.alpha_f = Param(initialize=thermal_diffusivity)  # [m²/s]
     model.rho_f = Param(initialize=fluid_density)  # [kg/m³]
-    model.cp_f = Param(initialize=specific_heat)  # [J/kg·K]
+    model.eta_f = Param(initialize=fluid_dynamic_viscosity)  # [Pa·s]
+    model.lam_f = Param(initialize=fluid_thermal_conductivity)  # [W/m·K]
+    model.cp_f = Param(initialize=fluid_specific_heat)  # [J/kg·K]
 
     # Pipe properties
     model.rho_p = Param(initialize=pipe_density)  # [kg/m³]
@@ -189,11 +199,13 @@ def create_pipe_flow_model(
         # Use initial velocity to calculate h_int
         v_initial = velocity_func(0.0)
         h_int_initial, Re_initial, Pr_initial, Nu_initial = (
-            calculate_heat_transfer_coefficient(
-                velocity=v_initial,
-                pipe_diameter=pipe_diameter,
-                fluid_density=fluid_density,
-                fluid_specific_heat=specific_heat,
+            calculate_heat_transfer_coefficient_turbulent(
+                v_initial,
+                model.D,
+                model.rho_f,
+                model.eta_f,
+                model.lam_f,
+                model.cp_f
             )
         )
         print("Using Dittus-Boelter correlation for h_int:")
@@ -213,11 +225,8 @@ def create_pipe_flow_model(
         initialize=heat_transfer_coeff_int, mutable=True
     )  # [W/m²·K]
 
-    # Store correlation settings
+    # Store heat transfer coefficient settings
     model.use_dittus_boelter = use_dittus_boelter
-    model.pipe_diameter = pipe_diameter
-    model.fluid_density = fluid_density
-    model.specific_heat = specific_heat
 
     # Time-varying parameters (will be initialized after discretization)
     model.v = Param(model.t, mutable=True)
@@ -440,11 +449,13 @@ def solve_model(
 
         # Update heat transfer coefficient if using Dittus-Boelter correlation
         if model.use_dittus_boelter:
-            h_int_t, _, _, _ = calculate_heat_transfer_coefficient(
-                velocity=velocity_t,
-                pipe_diameter=model.pipe_diameter,
-                fluid_density=model.fluid_density,
-                fluid_specific_heat=model.specific_heat,
+            h_int_t, _, _, _ = calculate_heat_transfer_coefficient_turbulent(
+                velocity_t,
+                model.D,
+                model.rho_f,
+                model.eta_f,
+                model.lam_f,
+                model.cp_f
             )
             # Update the parameter value for this time step
             # Note: Since h_int is not time-varying in this model structure,

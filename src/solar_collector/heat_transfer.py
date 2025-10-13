@@ -12,17 +12,19 @@ DEFAULT_FLUID_SPECIFIC_HEAT = 2000.0  # J/kg·K
 DEFAULT_FLUID_THERMAL_CONDUCTIVITY = 0.12  # W/m·K (typical thermal oil)
 DEFAULT_FLUID_DYNAMIC_VISCOSITY = 0.01  # Pa·s (typical thermal oil)
 
+NUSSELT_NUMBER_LAMINAR = 4.36
 
-def calculate_heat_transfer_coefficient(
+def calculate_heat_transfer_coefficient_turbulent(
     velocity,
     pipe_diameter,
-    fluid_density=DEFAULT_FLUID_DENSITY,
-    fluid_viscosity=DEFAULT_FLUID_DYNAMIC_VISCOSITY,
-    fluid_thermal_conductivity=DEFAULT_FLUID_THERMAL_CONDUCTIVITY,
-    fluid_specific_heat=DEFAULT_FLUID_SPECIFIC_HEAT,
+    fluid_density,
+    fluid_viscosity,
+    fluid_thermal_conductivity,
+    fluid_specific_heat,
 ):
     """
-    Calculate internal heat transfer coefficient using Dittus-Boelter correlation
+    Calculate internal heat transfer coefficient in a pipe using Dittus-Boelter
+    correlation.
 
     The Dittus-Boelter correlation is widely used for turbulent flow in smooth
     pipes with moderate temperature differences. It provides good accuracy
@@ -34,13 +36,13 @@ def calculate_heat_transfer_coefficient(
         Fluid velocity [m/s]
     pipe_diameter : float
         Pipe inner diameter [m]
-    fluid_density : float, default=800.0
+    fluid_density : float
         Fluid density [kg/m³]
-    fluid_viscosity : float, default=0.01
+    fluid_viscosity : float
         Dynamic viscosity [Pa·s]
-    fluid_thermal_conductivity : float, default=0.12
+    fluid_thermal_conductivity : float
         Thermal conductivity [W/m·K]
-    fluid_specific_heat : float, default=2000.0
+    fluid_specific_heat : float
         Specific heat capacity [J/kg·K]
 
     Returns:
@@ -62,7 +64,9 @@ def calculate_heat_transfer_coefficient(
 
     Correlations used:
     - Turbulent flow (Re > 4000): Nu = 0.023 * Re^0.8 * Pr^0.4
-    - Laminar flow (Re ≤ 4000): Nu = 4.36 (constant for uniform heat flux)
+
+    For Laminar flow (Re ≤ 4000) use calculate_heat_transfer_coefficient_nusselt
+    with Nu = 4.36.
 
     Valid range:
     - 0.7 ≤ Pr ≤ 160
@@ -70,21 +74,68 @@ def calculate_heat_transfer_coefficient(
     - L/D > 10 (fully developed flow)
     """
     # Reynolds number
-    Re = fluid_density * velocity * pipe_diameter / fluid_viscosity
+    Re = calculate_reynolds_number(
+        velocity, pipe_diameter, fluid_density, fluid_viscosity
+    )
 
     # Prandtl number
-    Pr = fluid_viscosity * fluid_specific_heat / fluid_thermal_conductivity
+    Pr = calculate_prandtl_number(
+        fluid_viscosity, fluid_specific_heat, fluid_thermal_conductivity
+    )
 
     # Nusselt number (Dittus-Boelter correlation)
-    if Re > 4000:  # Turbulent flow
-        Nu = 0.023 * Re**0.8 * Pr**0.4
-    else:  # Laminar flow
-        Nu = 4.36  # Constant Nu for uniform heat flux
+    Nu = 0.023 * Re**0.8 * Pr**0.4
+
+    # Heat transfer coefficient
+    h = calculate_heat_transfer_coefficient_nusselt(
+        pipe_diameter,
+        fluid_thermal_conductivity,
+        Nu
+    )
+
+    return h, Re, Pr, Nu
+
+
+def calculate_heat_transfer_coefficient_nusselt(
+    pipe_diameter,
+    fluid_thermal_conductivity,
+    Nu=4.36
+):
+    """
+    Calculate internal heat transfer coefficient for laminar flow in a
+    pipe.
+
+    Parameters:
+    -----------
+    pipe_diameter : float
+        Pipe inner diameter [m]
+    fluid_thermal_conductivity : float
+        Thermal conductivity [W/m·K]
+    Nu : float, default=4.36
+        Nusselt number [-]
+
+    Returns:
+    --------
+    h : float
+        Heat transfer coefficient [W/m²·K]
+
+    Notes:
+    ------
+    - Nusselt number: Nu = h*D/k (convective / conductive heat transfer)
+
+    Correlations used:
+    - Laminar flow (Re ≤ 4000): Nu = 4.36 (constant for uniform heat flux)
+
+    Valid range:
+    - 0.7 ≤ Pr ≤ 160
+    - Re > 10,000 (but works reasonably well down to Re ≈ 4000)
+    - L/D > 10 (fully developed flow)
+    """
 
     # Heat transfer coefficient
     h = Nu * fluid_thermal_conductivity / pipe_diameter
 
-    return h, Re, Pr, Nu
+    return h
 
 
 def calculate_reynolds_number(velocity, pipe_diameter, fluid_density, fluid_viscosity):
