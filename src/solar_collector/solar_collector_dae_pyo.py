@@ -46,7 +46,7 @@ def create_pipe_flow_model(
     specific_heat=SPECIFIC_HEAT,
     T_ambient=ZERO_C + 20.0,
     pipe_diameter=PIPE_DIAMETER,
-    heat_transfer_coeff_ext=HEAT_TRANSFER_COEFF_EXT
+    heat_transfer_coeff_ext=HEAT_TRANSFER_COEFF_EXT,
 ):
     """
     Create Pyomo model for pipe flow heat transport PDE
@@ -200,7 +200,9 @@ def add_pde_constraints(model):
             #   h * π * D * (T - T_ambient) / (π * D² / 4) [W/m³]
             # Simplified:
             #   h * 4 * (T - T_ambient) / D [W/m³]
-            heat_loss_volumetric = m.h_ext * 4.0 * (m.T[t, x] - m.T_ambient) / m.D
+            heat_loss_volumetric = (
+                m.h_ext * 4.0 * (m.T[t, x] - m.T_ambient) / m.D
+            )
 
             # PDE: ρcp∂T/∂t + ρcpv(t) ∂T/∂x = ρcpα∂²T/∂x² + q_input - q_loss
             return rho_cp * m.dTdt[t, x] + rho_cp * m.v[t] * m.dTdx[t, x] == (

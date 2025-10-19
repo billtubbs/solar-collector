@@ -24,7 +24,7 @@ from pyomo.environ import (
 
 from solar_collector.config import PLOT_COLORS, VAR_INFO
 from solar_collector.heat_transfer import (
-    calculate_heat_transfer_coefficient_turbulent
+    calculate_heat_transfer_coefficient_turbulent,
 )
 
 # Constants
@@ -75,7 +75,7 @@ def create_pipe_flow_model(
         Length of solar collector section of pipe [m] (domain with heat input)
     t_final : float, default=5.0
         Final simulation time [s]
-    n_x : int, default=50
+    n_x : int, default=110
         Number of spatial discretization points
     n_t : int, default=50
         Number of temporal discretization points
@@ -205,7 +205,7 @@ def create_pipe_flow_model(
                 model.rho_f,
                 model.eta_f,
                 model.lam_f,
-                model.cp_f
+                model.cp_f,
             )
         )
         print("Using Dittus-Boelter correlation for h_int:")
@@ -369,7 +369,7 @@ def add_pde_constraints(model):
 
 
 def solve_model(
-    model, n_x=50, n_t=50, max_iter=1000, tol=1e-6, print_level=5, tee=True
+    model, n_x=110, n_t=50, max_iter=1000, tol=1e-6, print_level=5, tee=True
 ):
     """
     Discretize and solve the PDE model using finite differences
@@ -378,7 +378,7 @@ def solve_model(
     -----------
     model : pyomo.ConcreteModel
         The Pyomo model created by create_pipe_flow_model()
-    n_x : int, default=50
+    n_x : int, default=110
         Number of finite elements for spatial discretization
     n_t : int, default=50
         Number of finite elements for temporal discretization
@@ -455,7 +455,7 @@ def solve_model(
                 model.rho_f,
                 model.eta_f,
                 model.lam_f,
-                model.cp_f
+                model.cp_f,
             )
             # Update the parameter value for this time step
             # Note: Since h_int is not time-varying in this model structure,

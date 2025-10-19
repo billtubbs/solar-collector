@@ -1,0 +1,82 @@
+# Simulation specification for steps_01
+
+system:
+  name: TCP-100 Collector
+  model:
+    name: solar_collector_dae_pyo
+    params:
+      fluid:
+        thermal_diffusivity:
+          value: 0.25
+          units: m**2/s
+
+        density:
+          value: 800
+          units: kg/m**3
+
+        specific_heat_capacity:
+          value: 2000.0
+          units: J/(kg*K)
+
+        heat_transfer_coeff_ext:
+          value: 10.0
+          units: W/(m**2*K)
+
+      collector:
+        diameter:
+          value: 0.07
+          units: m
+
+        length:
+          value: 100.0
+          units: m
+
+      ambient:
+        T:
+          value: 20.0
+          units: degC
+        heat_transfer_coeff:
+          value: 10.0
+          units: W/(m**2*K)
+
+simulation:
+  params:
+    # Time domain
+    t_final:
+      value: 300.0
+      units: s
+
+    # Discretization
+    n_x: 110  # Number of spatial discretization points
+    n_t: 50  # Number of temporal discretization points
+
+  solver:
+    name: ipopt
+    options:
+      max_iter: 1000
+      tol: 1.0e-6
+      print_level: 5
+      tee: true
+
+inputs:
+  # Velocity: v(t)
+  velocity:
+    type: constant
+    value: 0.2
+    units: m/s
+
+  # Heat flux: q(t)
+  heat_flux:
+    type: step
+    times:
+      values: [0, 60.0, 240.0]
+      units: s
+    values:
+      values: [0.0, 40.0, 0.0]
+      units: kW/m**2
+
+  # Inlet temperature: T_inlet(t)
+  inlet_temperature:
+    type: constant
+    value: 270.0
+    units: degC
