@@ -18,35 +18,12 @@ from typing import Dict
 
 import pandas as pd
 
-try:
-    # Import from same module
-    from .fluid_properties import (
-        AntoineCorrelation,
-        ExponentialCorrelation,
-        FluidProperties,
-        PolynomialCorrelation,
-    )
-except ImportError:
-    # Handle direct execution or testing
-    try:
-        from fluid_properties import (
-            AntoineCorrelation,
-            ExponentialCorrelation,
-            FluidProperties,
-            PolynomialCorrelation,
-        )
-    except ImportError:
-        # Import from parent package
-        import os
-        import sys
-
-        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-        from fluid_properties import (
-            AntoineCorrelation,
-            ExponentialCorrelation,
-            FluidProperties,
-            PolynomialCorrelation,
-        )
+from .fluid_properties import (
+    AntoineCorrelation,
+    ExponentialCorrelation,
+    FluidProperties,
+    PolynomialCorrelation,
+)
 
 
 class Syltherm800(FluidProperties):
@@ -416,34 +393,3 @@ def create_syltherm800(fit_data: bool = True) -> Syltherm800:
         Initialized SYLTHERM 800 fluid object
     """
     return Syltherm800(fit_coefficients=fit_data)
-
-
-if __name__ == "__main__":
-    # Demonstration of SYLTHERM 800 fluid properties
-    print("SYLTHERM 800 Heat Transfer Fluid - Property Model")
-    print("=" * 80)
-
-    # Create fluid with placeholder coefficients
-    syltherm = Syltherm800(fit_coefficients=False)
-    syltherm.summary()
-
-    # Load manufacturer data
-    try:
-        data = syltherm.load_manufacturer_data()
-        print(
-            f"\\nLoaded manufacturer data: {len(data['T_K'])} "
-            "temperature points"
-        )
-
-        # Validate current correlations (with placeholder coefficients)
-        print("\\nValidating placeholder correlations...")
-        validation_results = syltherm.validate_correlations(data)
-
-        print("\\nValidation complete. Next steps:")
-        print("1. Implement fitting algorithms for each correlation type")
-        print("2. Fit coefficients to minimize RMSE against manufacturer data")
-        print("3. Re-validate with fitted coefficients")
-
-    except FileNotFoundError as e:
-        print(f"\\nWarning: {e}")
-        print("Cannot validate without manufacturer data")
