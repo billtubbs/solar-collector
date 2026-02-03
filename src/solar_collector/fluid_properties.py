@@ -683,7 +683,7 @@ def validate_correlations(fluid, data):
 
 def demonstration():
     """
-    Comprehensive demonstration of SYLTHERM800 capabilities
+    Demonstration of FluidProperties use
     """
     print("SYLTHERM 800 Heat Transfer Fluid - Python Implementation")
     print("=" * 80)
