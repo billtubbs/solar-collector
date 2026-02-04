@@ -43,6 +43,11 @@ PIPE_THERMAL_CONDUCTIVITY = 50.0  # W/m·K (typical for steel)
 PIPE_DENSITY = 7850.0  # kg/m³ (steel)
 PIPE_SPECIFIC_HEAT = 450.0  # J/kg·K (steel)
 
+# Solar collector parameters (based on Yebra & Rhinehart model)
+MIRROR_WIDTH = 5.76  # m (width of parabolic mirrors)
+CONCENTRATION_FACTOR = 26.0  # Solar concentration ratio
+OPTICAL_EFFICIENCY = 0.8  # Efficiency factor for mirror/alignment losses
+
 
 def create_pipe_flow_model(
     L=COLLECTOR_LENGTH,
@@ -50,7 +55,7 @@ def create_pipe_flow_model(
     n_x=50,
     n_t=50,
     velocity_func=None,
-    heat_func=None,
+    irradiance_func=None,
     inlet_func=None,
     thermal_diffusivity=THERMAL_DIFFUSIVITY,
     fluid_density=FLUID_DENSITY,
@@ -65,6 +70,8 @@ def create_pipe_flow_model(
     pipe_density=PIPE_DENSITY,
     pipe_specific_heat=PIPE_SPECIFIC_HEAT,
     use_dittus_boelter=True,
+    concentration_factor=CONCENTRATION_FACTOR,
+    optical_efficiency=OPTICAL_EFFICIENCY,
 ):
     """
     Create Pyomo model for pipe flow heat transport PDE with fluid and wall
@@ -82,9 +89,10 @@ def create_pipe_flow_model(
     velocity_func : callable, optional
         Function for time-varying fluid velocity v(t) [m/s]
         If None, uses default constant velocity
-    heat_func : callable, optional
-        Function for time-varying heat input to pipe wall q(t) [W/m²]
-        If None, uses default zero heat input
+    irradiance_func : callable, optional
+        Function for time-varying solar irradiance I(t) [W/m²]
+        (natural/direct normal irradiance before concentration)
+        If None, uses default zero irradiance
     inlet_func : callable, optional
         Function for time-varying inlet temperature T_inlet(t) [K]
         If None, uses default constant inlet temperature
@@ -112,6 +120,10 @@ def create_pipe_flow_model(
         Pipe wall density ρ_p [kg/m³]
     pipe_specific_heat : float, default=450.0
         Pipe wall specific heat capacity cp_p [J/kg·K]
+    concentration_factor : float, default=26.0
+        Solar concentration ratio c (mirror width / effective absorber width)
+    optical_efficiency : float, default=0.8
+        Optical efficiency ε accounting for mirror/alignment losses
 
     Returns:
     --------
@@ -176,12 +188,13 @@ def create_pipe_flow_model(
         def velocity_func(t):
             return 0.2  # velocity [m/s]
 
-    if heat_func is None:
+    if irradiance_func is None:
 
-        def heat_func(t):
-            # Heat flux to pipe wall [W/m²]
+        def irradiance_func(t):
+            # Natural solar irradiance [W/m²] (before concentration)
+            # Typical DNI values: 800-1000 W/m² on a clear day
             if t > 60.0 and t <= 240.0:
-                return 40e3
+                return 800.0
             return 0.0
 
     if inlet_func is None:
@@ -191,8 +204,12 @@ def create_pipe_flow_model(
 
     # Store functions for later use
     model.velocity_func = velocity_func
-    model.heat_func = heat_func
+    model.irradiance_func = irradiance_func
     model.inlet_func = inlet_func
+
+    # Solar collector parameters (Yebra & Rhinehart model)
+    model.c = Param(initialize=concentration_factor)  # Concentration ratio
+    model.epsilon = Param(initialize=optical_efficiency)  # Optical efficiency
 
     # Calculate initial heat transfer coefficient if using Dittus-Boelter
     if use_dittus_boelter:
@@ -230,7 +247,7 @@ def create_pipe_flow_model(
 
     # Time-varying parameters (will be initialized after discretization)
     model.v = Param(model.t, mutable=True)
-    model.q = Param(model.t, mutable=True)
+    model.I = Param(model.t, mutable=True)  # Solar irradiance [W/m²]
     model.T_inlet = Param(model.t, mutable=True)
 
     return model
@@ -280,19 +297,25 @@ def add_pde_constraints(model):
 
         # For nominal physical pipe (0 < x <= L): include heat input
         if x <= m.L:
+            # Solar heat input based on Yebra & Rhinehart model:
+            # q_eff = I * c * ε / 2 [W/m²]
+            # where:
+            #   I = natural solar irradiance [W/m²]
+            #   c = concentration factor (mirror width / absorber width)
+            #   ε = optical efficiency (mirror/alignment losses)
+            #   /2 = accounts for 180° illumination of pipe surface
+            q_eff = m.I[t] * m.c * m.epsilon / 2.0
+
             # Heat input to pipe wall per unit volume [W/m³]
-            # Heat flux q(t) [W/m²] applied to outer surface
             # Outer diameter: D + 2*d
-            # Heat input per unit length: q(t) * π * (D + 2*d) [W/m]
+            # Heat input per unit length: q_eff * π * (D + 2*d) [W/m]
             # Pipe wall volume per unit length:
             #   π * ((D+2*d)² - D²) / 4 [m³/m]
-            # Heat input per unit volume:
-            #   q(t) * π * (D + 2*d) / (π * ((D+2*d)² - D²) / 4)
             # Simplified:
-            #   q(t) * 4 * (D + 2*d) / ((D+2*d)² - D²) [W/m³]
+            #   q_eff * 4 * (D + 2*d) / ((D+2*d)² - D²) [W/m³]
             D_outer = m.D + 2 * m.d
             heat_input_volumetric = (
-                m.q[t] * 4.0 * D_outer / (D_outer**2 - m.D**2)
+                q_eff * 4.0 * D_outer / (D_outer**2 - m.D**2)
             )
 
             # Heat transfer to fluid per unit volume [W/m³]
@@ -444,7 +467,7 @@ def solve_model(
     for t in model.t:
         velocity_t = model.velocity_func(t)
         model.v[t].set_value(velocity_t)
-        model.q[t].set_value(model.heat_func(t))
+        model.I[t].set_value(model.irradiance_func(t))
         model.T_inlet[t].set_value(model.inlet_func(t))
 
         # Update heat transfer coefficient if using Dittus-Boelter correlation
@@ -554,7 +577,7 @@ def plot_results(
 
     # Extract input parameter values
     v_vals = [pyo.environ.value(model.v[t]) for t in t_vals]
-    q_vals = [pyo.environ.value(model.q[t]) for t in t_vals]
+    I_vals = [pyo.environ.value(model.I[t]) for t in t_vals]
     T_inlet_vals = [pyo.environ.value(model.T_inlet[t]) for t in t_vals]
     inlet_temps_p = temp_p_vals[:, 0] - ZERO_C
 
@@ -575,15 +598,15 @@ def plot_results(
     ax1.set_title(f"{name} - Fluid Velocity")
     ax1.grid(True, alpha=0.3)
 
-    # 2. Heat input time series
+    # 2. Solar irradiance time series
     ax2.plot(
         t_vals,
-        np.array(q_vals) / 1e3,
+        np.array(I_vals),
         color=colors["q_solar_conc"],
         linewidth=2,
     )
-    ax2.set_ylabel("Heat Input [kW/m²]")
-    ax2.set_title(f"{name} - Solar Heat Input")
+    ax2.set_ylabel("Irradiance [W/m²]")
+    ax2.set_title(f"{name} - Solar Irradiance (DNI)")
     ax2.grid(True, alpha=0.3)
 
     # 3. Inlet temperature time series
