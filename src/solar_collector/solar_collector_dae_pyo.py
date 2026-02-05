@@ -7,7 +7,7 @@ with heat input and convective losses.
 
 Functions
 ---------
-create_pipe_flow_model(...) -> ConcreteModel
+create_collector_model(...) -> ConcreteModel
     Creates Pyomo model with temperature variable T, derivative variables,
     physical parameters, and time-varying input parameters (v, I, T_inlet).
 
@@ -56,7 +56,7 @@ CONCENTRATION_FACTOR = 26.0  # Solar concentration ratio
 OPTICAL_EFFICIENCY = 0.8  # Efficiency factor for mirror/alignment losses
 
 
-def create_pipe_flow_model(
+def create_collector_model(
     L=COLLECTOR_LENGTH,
     t_final=5.0,
     n_x=50,

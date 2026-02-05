@@ -13,7 +13,7 @@ from solar_collector.solar_collector_dae_pyo import (
     add_pde_constraints as add_single_constraints,
 )
 from solar_collector.solar_collector_dae_pyo import (
-    create_pipe_flow_model as create_single_temp_model,
+    create_collector_model as create_single_temp_model,
 )
 from solar_collector.solar_collector_dae_pyo import (
     solve_model as solve_single_model,
@@ -22,7 +22,7 @@ from solar_collector.solar_collector_dae_pyo_two_temp import (
     add_pde_constraints as add_two_constraints,
 )
 from solar_collector.solar_collector_dae_pyo_two_temp import (
-    create_pipe_flow_model as create_two_temp_model,
+    create_collector_model as create_two_temp_model,
 )
 from solar_collector.solar_collector_dae_pyo_two_temp import (
     solve_model as solve_two_model,

@@ -296,11 +296,14 @@ T_f(0, x) = T_{f,0}, \qquad T_p(0, x) = T_{p,0}
 \label{eq:ic}
 \end{equation}
 
-\subsection{Numerical Solution}
+\subsection{Numerical Solution} \label{sec:numerical_solution}
 
-The coupled PDEs are solved using the method of lines with finite difference discretization. The spatial domain is discretized using central differences (second-order accuracy), while the temporal domain uses backward Euler (implicit) discretization for numerical stability. The resulting system of differential-algebraic equations (DAEs) is solved using the IPOPT nonlinear optimization solver within the Pyomo framework \citep{bynum2021pyomo, hart2011pyomo}.
+The coupled PDEs are solved using the method of lines with finite difference discretization. The spatial domain is discretized using central differences (second-order accuracy), while the temporal domain uses backward Euler (implicit) discretization for numerical stability. The discretization grid can be specified with two parameters, $n_x$ and $n_t$ which define the number of points in the spatial and time dimensions, respectively.  The desired duration of the simulation is specified by setting $t_{final}$.
+
+The resulting system of differential-algebraic equations (DAEs) is solved using the IPOPT nonlinear optimization solver within the Pyomo framework \citep{bynum2021pyomo, hart2011pyomo}.
 
 The default model parameters used in the simulations are summarized in Table~\ref{tab:model_parameters}.
+
 
 \begin{table}[htbp]
 \centering

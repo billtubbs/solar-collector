@@ -6,9 +6,9 @@ transfer in a solar collector pipe using Pyomo's differential-algebraic
 equation (DAE) framework. The model includes separate temperatures for the
 fluid (T_f) and pipe wall (T_p) with heat transfer between them and to ambient.
 
-Functions
----------
-create_pipe_flow_model(...) -> ConcreteModel
+Dynamic Model Functions
+-----------------------
+create_collector_model(...) -> ConcreteModel
     Creates Pyomo model with fluid (T_f) and pipe wall (T_p) temperature
     variables, derivative variables, physical parameters, and time-varying
     input parameters (v, I, T_inlet). Optionally uses Dittus-Boelter for h_int.
@@ -20,8 +20,38 @@ add_pde_constraints(model) -> ConcreteModel
 solve_model(model, ...) -> Results
     Applies finite difference discretization and solves with IPOPT.
 
+Steady-State Model Functions
+----------------------------
+create_collector_model_steady_state(...) -> ConcreteModel
+    Creates Pyomo model for steady-state analysis with only spatial domain.
+    Input parameters (mass_flow_rate, irradiance, T_inlet) are scalars.
+
+add_steady_state_constraints(model) -> ConcreteModel
+    Adds steady-state ODE constraints (time derivatives = 0) and boundary
+    conditions.
+
+solve_steady_state_model(model, ...) -> Results
+    Discretizes spatial domain and solves steady-state model with IPOPT.
+
+Plotting Functions
+------------------
+plot_time_series(t_vals, data_series, ...) -> (Figure, Axes)
+    General-purpose function for plotting multiple time series on stacked
+    subplots.
+
+plot_temperature_field(t_vals, x_vals, temp_vals, ...) -> (Figure, Axes)
+    General-purpose function for plotting 2D temperature contour plots
+    (time vs position).
+
+extract_model_data(model) -> dict
+    Extracts time series and temperature field data from a solved model.
+
 plot_results(model, ...) -> (Figure, Figure, Figure)
-    Plots time series and contour plots for both fluid and wall temperatures.
+    Convenience function that creates time series and contour plots for
+    both fluid and wall temperatures (uses the above functions).
+
+plot_steady_state_results(model, ...) -> (Figure, Axes)
+    Plots steady-state temperature profiles T_f(x) and T_p(x).
 
 print_temp_profiles(model, ...)
     Prints temperature profiles and heat transfer analysis.
@@ -35,21 +65,19 @@ from pyomo.dae import ContinuousSet, DerivativeVar
 from pyomo.environ import (
     ConcreteModel,
     Constraint,
-    Expression,
     Objective,
     Param,
     SolverFactory,
     TransformationFactory,
     Var,
+)
+from pyomo.environ import (
     exp as pyo_exp,
 )
 
 from solar_collector.config import PLOT_COLORS, VAR_INFO
-from solar_collector.fluid_properties import SYLTHERM800
 from solar_collector.heat_transfer import (
     calculate_heat_transfer_coefficient_turbulent,
-    calculate_prandtl_number,
-    calculate_reynolds_number,
 )
 
 # Constants (Syltherm 800 at 300°C)
@@ -74,7 +102,7 @@ CONCENTRATION_FACTOR = 26.0  # Solar concentration ratio
 OPTICAL_EFFICIENCY = 0.8  # Efficiency factor for mirror/alignment losses
 
 
-def create_pipe_flow_model(
+def create_collector_model(
     fluid_props,
     L=COLLECTOR_LENGTH,
     t_final=5.0,
@@ -226,6 +254,7 @@ def create_pipe_flow_model(
         def rho_f(m, t, x):
             return m._rho_f_const
     else:
+
         @model.Expression(model.t, model.x)
         def rho_f(m, t, x):
             return m.fluid_props.density(m.T_f[t, x])
@@ -238,6 +267,7 @@ def create_pipe_flow_model(
         def eta_f(m, t, x):
             return m._eta_f_const
     else:
+
         @model.Expression(model.t, model.x)
         def eta_f(m, t, x):
             return m.fluid_props.viscosity(m.T_f[t, x], exp=pyo_exp)
@@ -252,6 +282,7 @@ def create_pipe_flow_model(
         def k_f(m, t, x):
             return m._k_f_const
     else:
+
         @model.Expression(model.t, model.x)
         def k_f(m, t, x):
             return m.fluid_props.thermal_conductivity(m.T_f[t, x])
@@ -264,6 +295,7 @@ def create_pipe_flow_model(
         def cp_f(m, t, x):
             return m._cp_f_const
     else:
+
         @model.Expression(model.t, model.x)
         def cp_f(m, t, x):
             return m.fluid_props.heat_capacity(m.T_f[t, x])
@@ -420,7 +452,7 @@ def add_pde_constraints(
     Parameters
     ----------
     model : pyomo.ConcreteModel
-        The Pyomo model created by create_pipe_flow_model().
+        The Pyomo model created by create_collector_model().
     T_f_initial : float or array-like, default=ZERO_C + 270.0
         Initial fluid temperature [K] at t=0. If float, uniform temperature
         for all x > 0. If array, must match the number of x points after
@@ -501,7 +533,9 @@ def add_pde_constraints(
             )
 
             # Heat transfer to fluid per unit volume [W/m³]
-            heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+            heat_to_fluid = (
+                m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+            )
 
             # Heat loss to ambient per unit volume [W/m³]
             # Heat loss per unit length:
@@ -532,7 +566,9 @@ def add_pde_constraints(
 
         else:
             # For extended section (L < x <= L_extended): no heat input
-            heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+            heat_to_fluid = (
+                m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+            )
             D_outer = m.D + 2 * m.d
             heat_loss_volumetric = (
                 m.h_ext
@@ -595,7 +631,7 @@ def solve_model(
     Parameters:
     -----------
     model : pyomo.ConcreteModel
-        The Pyomo model created by create_pipe_flow_model()
+        The Pyomo model created by create_collector_model()
     n_x : int, default=110
         Number of finite elements for spatial discretization
     n_t : int, default=50
@@ -664,7 +700,7 @@ def solve_model(
         model.I[t].set_value(model.irradiance_func(t))
         model.T_inlet[t].set_value(model.T_inlet_func(t))
 
-        # Note: h_int was already calculated in create_pipe_flow_model using
+        # Note: h_int was already calculated in create_collector_model using
         # Dittus-Boelter correlation. Velocity v(t,x) is computed as an
         # Expression from m_dot(t) and rho_f(t,x) to conserve mass.
 
@@ -690,190 +726,875 @@ def solve_model(
     return results
 
 
+# =============================================================================
+# Steady-State Model Functions
+# =============================================================================
+
+
+def create_collector_model_steady_state(
+    fluid_props,
+    L=COLLECTOR_LENGTH,
+    n_x=50,
+    mass_flow_rate=7.5,
+    irradiance=800.0,
+    T_inlet=ZERO_C + 200.0,
+    T_ref=ZERO_C + 300.0,
+    T_ambient=ZERO_C + 25.0,
+    D=PIPE_DIAMETER,
+    d=PIPE_WALL_THICKNESS,
+    h_ext=HEAT_TRANSFER_COEFF_EXT,
+    concentration_factor=CONCENTRATION_FACTOR,
+    optical_efficiency=OPTICAL_EFFICIENCY,
+    axial_dispersion_coeff=AXIAL_DISPERSION_COEFF,
+    constant_density=True,
+    constant_viscosity=True,
+    constant_thermal_conductivity=True,
+    constant_specific_heat=True,
+    constant_heat_transfer_coeff=True,
+):
+    """
+    Create a Pyomo model for steady-state solar collector heat transfer.
+
+    In steady state, all time derivatives are zero (∂T/∂t = 0), so we solve
+    for the spatial temperature profiles T_f(x) and T_p(x) given constant
+    operating conditions.
+
+    Parameters
+    ----------
+    fluid_props : FluidProperties
+        Object with methods: density(T), viscosity(T), thermal_conductivity(T),
+        heat_capacity(T) for the heat transfer fluid.
+    L : float, default=COLLECTOR_LENGTH
+        Length of the solar collector pipe [m].
+    n_x : int, default=50
+        Number of initial spatial points (will be refined during solve).
+    mass_flow_rate : float, default=7.5
+        Mass flow rate [kg/s].
+    irradiance : float, default=800.0
+        Solar irradiance [W/m²].
+    T_inlet : float, default=ZERO_C + 200.0
+        Inlet fluid temperature [K].
+    T_ref : float, default=ZERO_C + 300.0
+        Reference temperature for constant fluid properties [K].
+    T_ambient : float, default=ZERO_C + 25.0
+        Ambient temperature for heat loss [K].
+    D : float, default=PIPE_DIAMETER
+        Inner diameter of the absorber pipe [m].
+    d : float, default=PIPE_WALL_THICKNESS
+        Pipe wall thickness [m].
+    h_ext : float, default=HEAT_TRANSFER_COEFF_EXT
+        External heat transfer coefficient [W/(m²·K)].
+    concentration_factor : float, default=CONCENTRATION_FACTOR
+        Solar concentration ratio.
+    optical_efficiency : float, default=OPTICAL_EFFICIENCY
+        Optical efficiency of collector.
+    axial_dispersion_coeff : float, default=AXIAL_DISPERSION_COEFF
+        Axial dispersion coefficient for turbulent flow [m²/s].
+    constant_density : bool, default=True
+        If True, use constant density at T_ref.
+    constant_viscosity : bool, default=True
+        If True, use constant viscosity at T_ref.
+    constant_thermal_conductivity : bool, default=True
+        If True, use constant thermal conductivity at T_ref.
+    constant_specific_heat : bool, default=True
+        If True, use constant specific heat at T_ref.
+    constant_heat_transfer_coeff : bool, default=True
+        If True, use constant h_int calculated at T_ref.
+
+    Returns
+    -------
+    model : pyomo.ConcreteModel
+        Pyomo model with variables, parameters, and expressions for
+        steady-state analysis.
+    """
+    model = ConcreteModel()
+
+    # Store reference temperature and fluid properties object
+    model.T_ref = T_ref
+    model.fluid_props = fluid_props
+
+    # Store constant property flags for later reference
+    model.constant_density = constant_density
+    model.constant_viscosity = constant_viscosity
+    model.constant_thermal_conductivity = constant_thermal_conductivity
+    model.constant_specific_heat = constant_specific_heat
+    model.constant_heat_transfer_coeff = constant_heat_transfer_coeff
+
+    # Extended spatial domain for outlet boundary condition stability
+    L_extended = L * 1.1
+
+    # Spatial domain (continuous set) - no time domain for steady state
+    model.x = ContinuousSet(bounds=(0.0, L_extended))
+
+    # Temperature variables (functions of x only)
+    model.T_f = Var(model.x, initialize=T_ref)  # Fluid temperature [K]
+    model.T_p = Var(model.x, initialize=T_ref)  # Pipe wall temperature [K]
+
+    # Derivative variables (spatial only)
+    model.dT_f_dx = DerivativeVar(model.T_f, wrt=model.x)
+    model.d2T_f_dx2 = DerivativeVar(model.T_f, wrt=(model.x, model.x))
+    model.dT_p_dx = DerivativeVar(model.T_p, wrt=model.x)
+    model.d2T_p_dx2 = DerivativeVar(model.T_p, wrt=(model.x, model.x))
+
+    # Geometric parameters
+    model.D = Param(initialize=D)  # Inner pipe diameter [m]
+    model.d = Param(initialize=d)  # Pipe wall thickness [m]
+    model.L = Param(initialize=L)  # Collector length [m]
+    model.A = Param(initialize=np.pi * D**2 / 4.0)  # Flow cross-section [m²]
+
+    # Pipe material properties
+    model.rho_p = Param(initialize=PIPE_DENSITY)
+    model.cp_p = Param(initialize=PIPE_SPECIFIC_HEAT)
+    model.k_p = Param(initialize=PIPE_THERMAL_CONDUCTIVITY)
+    model.h_ext = Param(initialize=h_ext)
+    model.T_ambient = Param(initialize=T_ambient)
+
+    # Axial dispersion coefficient for turbulent flow [m²/s]
+    model.D_ax = Param(initialize=axial_dispersion_coeff)
+
+    # Solar collector parameters
+    model.c = Param(initialize=concentration_factor)
+    model.epsilon = Param(initialize=optical_efficiency)
+
+    # Operating condition parameters (scalar, not time-varying)
+    model.m_dot = Param(initialize=mass_flow_rate)
+    model.I = Param(initialize=irradiance)
+    model.T_inlet = Param(initialize=T_inlet)
+
+    # Fluid density: constant or temperature-dependent
+    if constant_density:
+        model._rho_f_const = Param(initialize=fluid_props.density(T_ref))
+
+        @model.Expression(model.x)
+        def rho_f(m, x):
+            return m._rho_f_const
+    else:
+
+        @model.Expression(model.x)
+        def rho_f(m, x):
+            return m.fluid_props.density(m.T_f[x])
+
+    # Fluid dynamic viscosity: constant or temperature-dependent
+    if constant_viscosity:
+        model._eta_f_const = Param(initialize=fluid_props.viscosity(T_ref))
+
+        @model.Expression(model.x)
+        def eta_f(m, x):
+            return m._eta_f_const
+    else:
+
+        @model.Expression(model.x)
+        def eta_f(m, x):
+            return m.fluid_props.viscosity(m.T_f[x], exp=pyo_exp)
+
+    # Fluid thermal conductivity: constant or temperature-dependent
+    if constant_thermal_conductivity:
+        model._k_f_const = Param(
+            initialize=fluid_props.thermal_conductivity(T_ref)
+        )
+
+        @model.Expression(model.x)
+        def k_f(m, x):
+            return m._k_f_const
+    else:
+
+        @model.Expression(model.x)
+        def k_f(m, x):
+            return m.fluid_props.thermal_conductivity(m.T_f[x])
+
+    # Fluid specific heat: constant or temperature-dependent
+    if constant_specific_heat:
+        model._cp_f_const = Param(initialize=fluid_props.heat_capacity(T_ref))
+
+        @model.Expression(model.x)
+        def cp_f(m, x):
+            return m._cp_f_const
+    else:
+
+        @model.Expression(model.x)
+        def cp_f(m, x):
+            return m.fluid_props.heat_capacity(m.T_f[x])
+
+    # Velocity expression from mass flow rate (scalar m_dot, x-dependent rho_f)
+    @model.Expression(model.x)
+    def v(m, x):
+        return m.m_dot / (m.rho_f[x] * m.A)
+
+    # Heat transfer coefficient: constant or computed from Dittus-Boelter
+    if constant_heat_transfer_coeff:
+        # Calculate h_int at reference temperature
+        rho_ref = fluid_props.density(T_ref)
+        eta_ref = fluid_props.viscosity(T_ref)
+        k_ref = fluid_props.thermal_conductivity(T_ref)
+        cp_ref = fluid_props.heat_capacity(T_ref)
+        v_ref = mass_flow_rate / (rho_ref * np.pi * D**2 / 4.0)
+
+        h_int_ref, _, _, _ = calculate_heat_transfer_coefficient_turbulent(
+            v_ref, D, rho_ref, eta_ref, k_ref, cp_ref
+        )
+
+        model._h_int_const = Param(initialize=h_int_ref)
+
+        @model.Expression(model.x)
+        def h_int(m, x):
+            return m._h_int_const
+    else:
+        # Temperature-dependent h_int via Dittus-Boelter
+        @model.Expression(model.x)
+        def h_int(m, x):
+            rho = m.rho_f[x]
+            eta = m.eta_f[x]
+            k = m.k_f[x]
+            cp = m.cp_f[x]
+            local_v = m.v[x]
+            D = m.D
+
+            Re = rho * local_v * D / eta
+            Pr = eta * cp / k
+            Nu = 0.023 * Re**0.8 * Pr**0.4
+            return Nu * k / D
+
+    return model
+
+
+def add_steady_state_constraints(model):
+    """
+    Add steady-state ODE constraints and boundary conditions.
+
+    In steady state, the time derivatives are zero, so the PDEs become ODEs:
+    - Fluid: ρ·cp·v·∂T_f/∂x = ρ·cp·D_ax·∂²T_f/∂x² + h_int·4·(T_p - T_f)/D
+    - Wall: 0 = α_p·∂²T_p/∂x² + q_solar - q_to_fluid - q_to_ambient
+
+    Parameters
+    ----------
+    model : pyomo.ConcreteModel
+        The model created by create_collector_model_steady_state().
+
+    Returns
+    -------
+    model : pyomo.ConcreteModel
+        The model with ODE constraints and boundary conditions added.
+    """
+
+    # Fluid temperature ODE constraint (steady-state energy balance)
+    @model.Constraint(model.x)
+    def fluid_ode_constraint(m, x):
+        if x == 0:  # Skip inlet (boundary condition applies there)
+            return Constraint.Skip
+
+        # Heat transfer from pipe wall to fluid per unit volume [W/m³]
+        heat_to_fluid = m.h_int[x] * 4.0 * (m.T_p[x] - m.T_f[x]) / m.D
+
+        # Steady-state fluid energy balance:
+        # ρ·cp·v·∂T_f/∂x = ρ·cp·D_ax·∂²T_f/∂x² + heat_to_fluid
+        rho_cp = m.rho_f[x] * m.cp_f[x]
+        return (
+            rho_cp * m.v[x] * m.dT_f_dx[x]
+            == rho_cp * m.D_ax * m.d2T_f_dx2[x] + heat_to_fluid
+        )
+
+    # Pipe wall temperature ODE constraint (steady-state energy balance)
+    @model.Constraint(model.x)
+    def wall_ode_constraint(m, x):
+        # Density * specific heat for pipe wall
+        rho_cp = m.rho_p * m.cp_p
+
+        # For nominal physical pipe (0 <= x <= L): include heat input
+        if x <= m.L:
+            # Solar heat input: q_eff = I * c * ε / 2 [W/m²]
+            q_eff = m.I * m.c * m.epsilon / 2.0
+
+            # Heat input to pipe wall per unit volume [W/m³]
+            D_outer = m.D + 2 * m.d
+            heat_input_volumetric = (
+                q_eff * 4.0 * D_outer / (D_outer**2 - m.D**2)
+            )
+
+            # Heat transfer to fluid per unit volume [W/m³]
+            heat_to_fluid = m.h_int[x] * 4.0 * (m.T_p[x] - m.T_f[x]) / m.D
+
+            # Heat loss to ambient per unit volume [W/m³]
+            heat_loss_volumetric = (
+                m.h_ext
+                * 4.0
+                * D_outer
+                * (m.T_p[x] - m.T_ambient)
+                / (D_outer**2 - m.D**2)
+            )
+
+            # Pipe thermal diffusivity
+            alpha_p = m.k_p / rho_cp
+
+            # Steady-state wall energy balance (∂T_p/∂t = 0):
+            # 0 = α_p·ρcp·∂²T_p/∂x² + q_in - q_to_fluid - q_loss
+            return 0 == (
+                rho_cp * alpha_p * m.d2T_p_dx2[x]
+                + heat_input_volumetric
+                - heat_to_fluid
+                - heat_loss_volumetric
+            )
+
+        else:
+            # For extended section (L < x <= L_extended): no heat input
+            heat_to_fluid = m.h_int[x] * 4.0 * (m.T_p[x] - m.T_f[x]) / m.D
+            D_outer = m.D + 2 * m.d
+            heat_loss_volumetric = (
+                m.h_ext
+                * 4.0
+                * D_outer
+                * (m.T_p[x] - m.T_ambient)
+                / (D_outer**2 - m.D**2)
+            )
+            alpha_p = m.k_p / rho_cp
+
+            return 0 == (
+                rho_cp * alpha_p * m.d2T_p_dx2[x]
+                - heat_to_fluid
+                - heat_loss_volumetric
+            )
+
+    # Inlet boundary condition for fluid temperature
+    model.inlet_bc = Constraint(expr=model.T_f[0] == model.T_inlet)
+
+    # Dummy objective (required by Pyomo)
+    model.obj = Objective(expr=1)
+
+    return model
+
+
+def solve_steady_state_model(
+    model, n_x=110, max_iter=1000, tol=1e-6, print_level=5, tee=True
+):
+    """
+    Discretize and solve the steady-state model using finite differences.
+
+    Parameters
+    ----------
+    model : pyomo.ConcreteModel
+        The model created by create_collector_model_steady_state() with
+        constraints added by add_steady_state_constraints().
+    n_x : int, default=110
+        Number of finite elements for spatial discretization.
+    max_iter : int, default=1000
+        Maximum number of IPOPT solver iterations.
+    tol : float, default=1e-6
+        Solver tolerance for convergence.
+    print_level : int, default=5
+        IPOPT print level (0=no output, 5=detailed output).
+    tee : bool, default=True
+        Whether to display solver output to console.
+
+    Returns
+    -------
+    results : pyomo solver results object
+        Contains solver status, termination condition, and solution
+        statistics.
+    """
+    # Apply finite difference discretization (CENTRAL for 2nd order accuracy)
+    TransformationFactory("dae.finite_difference").apply_to(
+        model, nfe=n_x, scheme="CENTRAL", wrt=model.x
+    )
+
+    # Outlet boundary conditions (zero gradient)
+    x_vals = sorted(model.x)
+    x_outlet = x_vals[-1]
+    x_before = x_vals[-2]
+
+    model.fluid_outlet_bc = Constraint(
+        expr=model.T_f[x_outlet] == model.T_f[x_before]
+    )
+    model.wall_outlet_bc = Constraint(
+        expr=model.T_p[x_outlet] == model.T_p[x_before]
+    )
+
+    print(f"Discretized with {len(model.x)} spatial points")
+
+    # Provide good initial guess for temperature fields
+    T_inlet_val = float(model.T_inlet.value)
+    for x in model.x:
+        model.T_f[x].set_value(T_inlet_val)
+        model.T_p[x].set_value(T_inlet_val + 10.0)  # Slightly higher for wall
+
+    # Configure solver
+    solver = SolverFactory("ipopt")
+    solver.options["max_iter"] = max_iter
+    solver.options["tol"] = tol
+    solver.options["print_level"] = print_level
+
+    print("Solving steady-state model with IPOPT...")
+    results = solver.solve(model, tee=tee)
+
+    return results
+
+
+def plot_steady_state_results(
+    model,
+    name="Steady-State Temperature Profiles",
+    var_info=None,
+    colors=None,
+    figsize=(10, 6),
+):
+    """
+    Plot steady-state temperature profiles for fluid and pipe wall.
+
+    Parameters
+    ----------
+    model : pyomo.ConcreteModel
+        Solved steady-state model.
+    name : str, default="Steady-State Temperature Profiles"
+        Title for the plot.
+    var_info : dict, optional
+        Variable display information (labels, units).
+    colors : dict, optional
+        Color scheme for plots.
+    figsize : tuple, default=(10, 6)
+        Figure size (width, height) in inches.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure object.
+    ax : matplotlib.axes.Axes
+        The axes object.
+    """
+    if var_info is None:
+        var_info = VAR_INFO
+    if colors is None:
+        colors = PLOT_COLORS
+
+    # Get spatial points and temperature values
+    x_vals = np.array(sorted(model.x))
+    T_f_vals = np.array([model.T_f[x].value for x in x_vals])
+    T_p_vals = np.array([model.T_p[x].value for x in x_vals])
+
+    # Convert to Celsius
+    T_f_C = T_f_vals - ZERO_C
+    T_p_C = T_p_vals - ZERO_C
+
+    # Create plot
+    fig, ax = plt.subplots(figsize=figsize)
+
+    ax.plot(
+        x_vals, T_f_C, label="Fluid $T_f(x)$", color=colors.get("T_f", "blue")
+    )
+    ax.plot(
+        x_vals,
+        T_p_C,
+        label="Pipe wall $T_p(x)$",
+        color=colors.get("T_p", "red"),
+        linestyle="--",
+    )
+
+    # Mark the collector length
+    L_val = float(model.L.value)
+    ax.axvline(
+        L_val, color="gray", linestyle=":", alpha=0.7, label=f"L = {L_val} m"
+    )
+
+    ax.set_xlabel("Position $x$ [m]")
+    ax.set_ylabel("Temperature [°C]")
+    ax.set_title(name)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Add summary info as text
+    T_inlet_C = float(model.T_inlet.value) - ZERO_C
+    T_outlet_C = T_f_C[-1]
+    delta_T = T_outlet_C - T_inlet_C
+    info_text = (
+        f"$T_{{inlet}}$ = {T_inlet_C:.1f}°C\n"
+        f"$T_{{outlet}}$ = {T_outlet_C:.1f}°C\n"
+        f"$\\Delta T$ = {delta_T:.1f}°C"
+    )
+    ax.text(
+        0.02,
+        0.98,
+        info_text,
+        transform=ax.transAxes,
+        verticalalignment="top",
+        fontsize=9,
+        bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.5},
+    )
+
+    plt.tight_layout()
+    return fig, ax
+
+
+# =============================================================================
+# General-Purpose Plotting Functions
+# =============================================================================
+
+
+def plot_time_series(
+    t_vals,
+    data_series,
+    title="Time Series",
+    colors=None,
+    figsize=(8, 7.5),
+):
+    """
+    Plot multiple time series on vertically stacked subplots.
+
+    Parameters
+    ----------
+    t_vals : array-like
+        Time values for x-axis.
+    data_series : list of dict
+        List of dictionaries, each containing:
+        - 'y': array-like of y values (required)
+        - 'ylabel': str, y-axis label (required)
+        - 'label': str, legend label (optional, for multi-line plots)
+        - 'title': str, subplot title (optional)
+        - 'color': str, line color (optional)
+        - 'lines': list of dict for multiple lines on same subplot,
+          each with 'y', 'label', 'color' (optional)
+    title : str, default="Time Series"
+        Overall figure title (used as prefix for subplot titles).
+    colors : dict, optional
+        Color scheme dictionary.
+    figsize : tuple, default=(8, 7.5)
+        Figure size (width, height) in inches.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure object.
+    axes : list of matplotlib.axes.Axes
+        List of axes objects.
+
+    Example
+    -------
+    >>> data = [
+    ...     {'y': velocity, 'ylabel': 'Velocity [m/s]', 'title': 'Velocity'},
+    ...     {'y': irradiance, 'ylabel': 'Irradiance [W/m²]'},
+    ...     {'lines': [
+    ...         {'y': T_inlet_f, 'label': 'Oil', 'color': 'blue'},
+    ...         {'y': T_inlet_p, 'label': 'Wall', 'color': 'red'},
+    ...     ], 'ylabel': 'Inlet Temp [°C]', 'title': 'Inlet Temperatures'},
+    ... ]
+    >>> fig, axes = plot_time_series(t, data, title="Model Results")
+    """
+    if colors is None:
+        colors = PLOT_COLORS
+
+    n_plots = len(data_series)
+    fig, axes = plt.subplots(n_plots, 1, figsize=figsize)
+
+    # Handle single subplot case
+    if n_plots == 1:
+        axes = [axes]
+
+    for i, (ax, series) in enumerate(zip(axes, data_series)):
+        subplot_title = series.get("title", "")
+        if title and subplot_title:
+            ax.set_title(f"{title} - {subplot_title}")
+        elif subplot_title:
+            ax.set_title(subplot_title)
+
+        # Check if multiple lines on this subplot
+        if "lines" in series:
+            for line in series["lines"]:
+                color = line.get("color", None)
+                label = line.get("label", None)
+                ax.plot(
+                    t_vals, line["y"], color=color, linewidth=2, label=label
+                )
+            if any("label" in line for line in series["lines"]):
+                ax.legend()
+        else:
+            color = series.get("color", None)
+            label = series.get("label", None)
+            ax.plot(t_vals, series["y"], color=color, linewidth=2, label=label)
+            if label:
+                ax.legend()
+
+        ax.set_ylabel(series.get("ylabel", ""))
+        ax.grid(True, alpha=0.3)
+
+        # Only add x-label to bottom subplot
+        if i == n_plots - 1:
+            ax.set_xlabel("Time [s]")
+
+    plt.tight_layout()
+    return fig, axes
+
+
+def plot_temperature_field(
+    t_vals,
+    x_vals,
+    temp_vals,
+    title="Temperature Field",
+    temp_range=(0, 400),
+    n_levels=21,
+    cmap="viridis",
+    collector_length=None,
+    figsize=(8, 7.5),
+):
+    """
+    Plot a 2D temperature field as a contour plot (time vs position).
+
+    Parameters
+    ----------
+    t_vals : array-like
+        Time values (shape: n_t).
+    x_vals : array-like
+        Position values (shape: n_x).
+    temp_vals : array-like
+        Temperature values in Celsius (shape: n_t x n_x).
+    title : str, default="Temperature Field"
+        Plot title.
+    temp_range : tuple, default=(0, 400)
+        Temperature range (min, max) for colorbar in °C.
+    n_levels : int, default=21
+        Number of contour levels.
+    cmap : str, default="viridis"
+        Colormap name.
+    collector_length : float, optional
+        If provided, draws a horizontal dashed line at this position
+        to mark the collector end.
+    figsize : tuple, default=(8, 7.5)
+        Figure size (width, height) in inches.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure object.
+    ax : matplotlib.axes.Axes
+        The axes object.
+    contour : matplotlib.contour.QuadContourSet
+        The contour object (useful for additional customization).
+
+    Example
+    -------
+    >>> fig, ax, contour = plot_temperature_field(
+    ...     t_vals, x_vals, T_f_celsius,
+    ...     title="Fluid Temperature",
+    ...     collector_length=96.0,
+    ... )
+    """
+    t_vals = np.asarray(t_vals)
+    x_vals = np.asarray(x_vals)
+    temp_vals = np.asarray(temp_vals)
+
+    # Create meshgrid (time on x-axis, position on y-axis)
+    T_grid, X_grid = np.meshgrid(t_vals, x_vals, indexing="ij")
+
+    # Define contour levels
+    temp_levels = np.linspace(temp_range[0], temp_range[1], n_levels)
+
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+
+    contour = ax.contourf(
+        T_grid.T,
+        X_grid.T,
+        temp_vals.T,
+        levels=temp_levels,
+        cmap=cmap,
+        extend="both",
+    )
+
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Position [m]")
+    ax.set_title(title)
+
+    # Mark collector end if specified
+    if collector_length is not None:
+        ax.axhline(
+            y=collector_length,
+            color="red",
+            linestyle="--",
+            alpha=0.7,
+            label="collector end",
+        )
+        ax.legend()
+
+    cbar = plt.colorbar(contour, ax=ax)
+    cbar.set_label("Temperature [°C]")
+
+    plt.tight_layout()
+    return fig, ax, contour
+
+
+def extract_model_data(model):
+    """
+    Extract time series and temperature field data from a solved dynamic model.
+
+    Parameters
+    ----------
+    model : pyomo.ConcreteModel
+        Solved Pyomo model containing temperature solutions.
+
+    Returns
+    -------
+    data : dict
+        Dictionary containing:
+        - 't_vals': time values
+        - 'x_vals': position values
+        - 'T_f': fluid temperature array (n_t x n_x) in Kelvin
+        - 'T_p': pipe wall temperature array (n_t x n_x) in Kelvin
+        - 'v': velocity values at x=0
+        - 'I': irradiance values
+        - 'T_inlet': inlet temperature values
+        - 'L': collector length
+    """
+    t_vals = np.array(sorted(model.t))
+    x_vals = np.array(sorted(model.x))
+
+    # Extract temperature fields
+    T_f = np.array(
+        [[pyo.environ.value(model.T_f[t, x]) for x in x_vals] for t in t_vals]
+    )
+    T_p = np.array(
+        [[pyo.environ.value(model.T_p[t, x]) for x in x_vals] for t in t_vals]
+    )
+
+    # Extract time-varying inputs (at x=0 for velocity)
+    v_vals = np.array(
+        [pyo.environ.value(model.v[t, x_vals[0]]) for t in t_vals]
+    )
+    I_vals = np.array([pyo.environ.value(model.I[t]) for t in t_vals])
+    T_inlet_vals = np.array(
+        [pyo.environ.value(model.T_inlet[t]) for t in t_vals]
+    )
+
+    return {
+        "t_vals": t_vals,
+        "x_vals": x_vals,
+        "T_f": T_f,
+        "T_p": T_p,
+        "v": v_vals,
+        "I": I_vals,
+        "T_inlet": T_inlet_vals,
+        "L": float(pyo.environ.value(model.L)),
+    }
+
+
 def plot_results(
     model,
-    t_eval,
-    x_eval,
+    t_eval=None,
+    x_eval=None,
     name="Oil + Pipe Model",
     var_info=VAR_INFO,
     colors=PLOT_COLORS,
     figsize=(8, 7.5),
 ):
     """
-    Plot temperature field solutions for both fluid and pipe wall temperatures
+    Plot temperature field solutions for both fluid and pipe wall temperatures.
 
-    Parameters:
-    -----------
+    This is a convenience function that creates three figures:
+    1. Time series plots (velocity, irradiance, inlet/outlet temperatures)
+    2. Fluid temperature contour plot
+    3. Pipe wall temperature contour plot
+
+    Parameters
+    ----------
     model : pyomo.ConcreteModel
-        Solved Pyomo model containing temperature solutions
-    t_eval : array-like
-        Times to evaluate (used for compatibility, not actively used)
-    x_eval : array-like
-        Positions to evaluate (used for compatibility, not actively used)
+        Solved Pyomo model containing temperature solutions.
+    t_eval : array-like, optional
+        Times to evaluate (deprecated, not used).
+    x_eval : array-like, optional
+        Positions to evaluate (deprecated, not used).
+    name : str, default="Oil + Pipe Model"
+        Name prefix for plot titles.
+    var_info : dict, optional
+        Variable display information.
+    colors : dict, optional
+        Color scheme dictionary.
     figsize : tuple, default=(8, 7.5)
-        Figure size as (width, height) in inches (not used in current layout)
+        Figure size (width, height) in inches.
 
-    Returns:
-    --------
+    Returns
+    -------
     fig1 : matplotlib.figure.Figure
-        Figure with 4 time series plots (velocity, heat input, inlet temp,
-        outlet temps)
+        Figure with 4 time series plots.
     fig2 : matplotlib.figure.Figure
-        Figure with contour plot of fluid temperature field (time vs position)
+        Figure with fluid temperature contour plot.
     fig3 : matplotlib.figure.Figure
-        Figure with contour plot of pipe wall temperature field (time vs
-        position)
-
-    Notes:
-    ------
-    Figure 1 (4x1 layout):
-    - Row 1: Fluid velocity over time
-    - Row 2: Solar heat input over time
-    - Row 3: Inlet temperature over time
-    - Row 4: Outlet temperatures (both fluid and wall) at collector end
-
-    Figure 2 & 3:
-    - Contour plots with time on x-axis and position on y-axis
-    - Consistent colorbar range (0-400°C) for easy comparison
-    - Red dashed line marks end of solar collector section (x = L)
+        Figure with pipe wall temperature contour plot.
     """
-    t_eval = np.array(t_eval).reshape(-1)
-    x_eval = np.array(x_eval).reshape(-1)
-
-    # Extract solution data
-    t_vals = pd.Index(model.t)
-    x_vals = pd.Index(model.x)
-
-    # Create meshgrid
-    T_grid, X_grid = np.meshgrid(t_vals, x_vals, indexing="ij")
-
-    # Extract fluid temperature values
-    temp_f_vals = np.array(
-        [[pyo.environ.value(model.T_f[t, x]) for x in x_vals] for t in t_vals]
-    )
-
-    # Extract pipe wall temperature values
-    temp_p_vals = np.array(
-        [[pyo.environ.value(model.T_p[t, x]) for x in x_vals] for t in t_vals]
-    )
-
-    # Extract input parameter values
-    v_vals = [pyo.environ.value(model.v[t]) for t in t_vals]
-    I_vals = [pyo.environ.value(model.I[t]) for t in t_vals]
-    T_inlet_vals = [pyo.environ.value(model.T_inlet[t]) for t in t_vals]
-    inlet_temps_p = temp_p_vals[:, 0] - ZERO_C
+    # Extract data from model
+    data = extract_model_data(model)
+    t_vals = data["t_vals"]
+    x_vals = data["x_vals"]
+    T_f = data["T_f"]
+    T_p = data["T_p"]
+    L = data["L"]
 
     # Find index closest to collector end (x = L) for outlet temperatures
-    end_idx = np.argmin(np.abs(np.array(x_vals) - model.L))
-    outlet_temps_f = temp_f_vals[:, end_idx] - ZERO_C
-    outlet_temps_p = temp_p_vals[:, end_idx] - ZERO_C
+    end_idx = np.argmin(np.abs(x_vals - L))
 
-    # Define consistent temperature range for colorbars (0-400°C)
-    temp_levels = np.linspace(0, 400, 21)
+    # Prepare time series data
+    time_series_data = [
+        {
+            "y": data["v"],
+            "ylabel": "Velocity [m/s]",
+            "title": "Fluid Velocity",
+            "color": colors.get("v"),
+        },
+        {
+            "y": data["I"],
+            "ylabel": "Irradiance [W/m²]",
+            "title": "Solar Irradiance (DNI)",
+            "color": colors.get("q_solar_conc"),
+        },
+        {
+            "lines": [
+                {
+                    "y": data["T_inlet"] - ZERO_C,
+                    "label": "Oil",
+                    "color": colors.get("T_f"),
+                },
+                {
+                    "y": T_p[:, 0] - ZERO_C,
+                    "label": "Wall",
+                    "color": colors.get("T_p"),
+                },
+            ],
+            "ylabel": "Inlet Temp [°C]",
+            "title": "Collector Inlet Temperatures",
+        },
+        {
+            "lines": [
+                {
+                    "y": T_f[:, end_idx] - ZERO_C,
+                    "label": "Oil",
+                    "color": colors.get("T_f"),
+                },
+                {
+                    "y": T_p[:, end_idx] - ZERO_C,
+                    "label": "Wall",
+                    "color": colors.get("T_p"),
+                },
+            ],
+            "ylabel": "Outlet Temp [°C]",
+            "title": "Collector Outlet Temperatures",
+        },
+    ]
 
-    # FIGURE 1: Time series plots (4 rows, 1 column)
-    fig1, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=figsize)
+    # Create Figure 1: Time series
+    fig1, _ = plot_time_series(
+        t_vals, time_series_data, title=name, colors=colors, figsize=figsize
+    )
 
-    # 1. Velocity time series
-    ax1.plot(t_vals, v_vals, color=colors["v"], linewidth=2)
-    ax1.set_ylabel("Velocity [m/s]")
-    ax1.set_title(f"{name} - Fluid Velocity")
-    ax1.grid(True, alpha=0.3)
-
-    # 2. Solar irradiance time series
-    ax2.plot(
+    # Create Figure 2: Fluid temperature field
+    fig2, _, _ = plot_temperature_field(
         t_vals,
-        np.array(I_vals),
-        color=colors["q_solar_conc"],
-        linewidth=2,
+        x_vals,
+        T_f - ZERO_C,
+        title=f"{name} - Oil Temperature Field",
+        collector_length=L,
+        figsize=figsize,
     )
-    ax2.set_ylabel("Irradiance [W/m²]")
-    ax2.set_title(f"{name} - Solar Irradiance (DNI)")
-    ax2.grid(True, alpha=0.3)
 
-    # 3. Inlet temperature time series
-    ax3.plot(
+    # Create Figure 3: Pipe wall temperature field
+    fig3, _, _ = plot_temperature_field(
         t_vals,
-        np.array(T_inlet_vals) - ZERO_C,
-        color=colors["T_f"],
-        linewidth=2,
-        label="Oil",
+        x_vals,
+        T_p - ZERO_C,
+        title=f"{name} - Pipe Wall Temperature Field",
+        collector_length=L,
+        figsize=figsize,
     )
-    ax3.plot(
-        t_vals, inlet_temps_p, color=colors["T_p"], linewidth=2, label="Wall"
-    )
-    ax3.set_ylabel("Inlet Temp [°C]")
-    ax3.set_title(f"{name} - Collector Inlet Temperatures")
-    ax3.legend()
-    ax3.grid(True, alpha=0.3)
-
-    # 4. Outlet temperatures time series (both fluid and wall)
-    ax4.plot(
-        t_vals, outlet_temps_f, color=colors["T_f"], linewidth=2, label="Oil"
-    )
-    ax4.plot(
-        t_vals, outlet_temps_p, color=colors["T_p"], linewidth=2, label="Wall"
-    )
-    ax4.set_xlabel("Time [s]")
-    ax4.set_ylabel("Outlet Temp [°C]")
-    ax4.set_title(f"{name} - Collector Outlet Temperatures")
-    ax4.legend()
-    ax4.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-
-    # FIGURE 2: Fluid temperature contour (time on x-axis, position on y-axis)
-    fig2, ax_contour_f = plt.subplots(1, 1, figsize=figsize)
-
-    contour_f = ax_contour_f.contourf(
-        T_grid.T,
-        X_grid.T,
-        (temp_f_vals - ZERO_C).T,
-        levels=temp_levels,
-        cmap="viridis",
-        extend="both",
-    )
-    ax_contour_f.set_xlabel("Time [s]")
-    ax_contour_f.set_ylabel("Position [m]")
-    ax_contour_f.set_title(f"{name} - Oil Temperature Field")
-    ax_contour_f.axhline(
-        y=model.L,
-        color="red",
-        linestyle="--",
-        alpha=0.7,
-        label="collector end",
-    )
-    ax_contour_f.legend()
-    cbar_f = plt.colorbar(contour_f, ax=ax_contour_f)
-    cbar_f.set_label("Temperature [°C]")
-
-    plt.tight_layout()
-
-    # FIGURE 3: Pipe wall temperature contour (time on x-axis, position
-    # on y-axis)
-    fig3, ax_contour_p = plt.subplots(1, 1, figsize=figsize)
-
-    contour_p = ax_contour_p.contourf(
-        T_grid.T,
-        X_grid.T,
-        (temp_p_vals - ZERO_C).T,
-        levels=temp_levels,
-        cmap="viridis",
-        extend="both",
-    )
-    ax_contour_p.set_xlabel("Time [s]")
-    ax_contour_p.set_ylabel("Position [m]")
-    ax_contour_p.set_title(f"{name} - Pipe Wall Temperature Field")
-    ax_contour_p.axhline(
-        y=model.L,
-        color="red",
-        linestyle="--",
-        alpha=0.7,
-        label="collector end",
-    )
-    ax_contour_p.legend()
-    cbar_p = plt.colorbar(contour_p, ax=ax_contour_p)
-    cbar_p.set_label("Temperature [°C]")
 
     return fig1, fig2, fig3
 
