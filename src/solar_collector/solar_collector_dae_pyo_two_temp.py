@@ -52,13 +52,13 @@ from solar_collector.heat_transfer import (
     calculate_reynolds_number,
 )
 
-# Constants
+# Constants (Syltherm 800 at 300°C)
 ZERO_C = 273.15  # K
-THERMAL_DIFFUSIVITY = 0.25  # m²/s
-FLUID_DENSITY = 800  # kg/m³
-FLUID_DYNAMIC_VISCOSITY = 0.001  # Pa·s
-FLUID_THERMAL_CONDUCTIVITY = 0.12  # W/m·K
-FLUID_SPECIFIC_HEAT = 2000.0  # J/kg·K
+FLUID_DENSITY = 671.0  # kg/m³
+FLUID_DYNAMIC_VISCOSITY = 0.00047  # Pa·s
+FLUID_THERMAL_CONDUCTIVITY = 0.0824  # W/m·K
+FLUID_SPECIFIC_HEAT = 2086.0  # J/kg·K
+AXIAL_DISPERSION_COEFF = 1e-4  # m²/s (turbulent axial dispersion)
 HEAT_TRANSFER_COEFF_INT = 10.0  # W/m²·K (internal, pipe-to-fluid)
 HEAT_TRANSFER_COEFF_EXT = 20.0  # W/m²·K (external, pipe-to-ambient)
 PIPE_DIAMETER = 0.07  # m
@@ -80,11 +80,10 @@ def create_pipe_flow_model(
     t_final=5.0,
     n_x=50,
     n_t=50,
-    velocity_func=None,
+    mass_flow_rate_func=None,
     irradiance_func=None,
-    inlet_func=None,
+    T_inlet_func=None,
     T_ref=ZERO_C + 300.0,
-    thermal_diffusivity=THERMAL_DIFFUSIVITY,
     T_ambient=ZERO_C + 20.0,
     pipe_diameter=PIPE_DIAMETER,
     pipe_wall_thickness=PIPE_WALL_THICKNESS,
@@ -99,6 +98,7 @@ def create_pipe_flow_model(
     constant_thermal_conductivity=True,
     constant_specific_heat=True,
     constant_heat_transfer_coeff=True,
+    axial_dispersion_coeff=AXIAL_DISPERSION_COEFF,
 ):
     """
     Create Pyomo model for pipe flow heat transport PDE with fluid and wall.
@@ -117,20 +117,19 @@ def create_pipe_flow_model(
         Number of spatial discretization points
     n_t : int, default=50
         Number of temporal discretization points
-    velocity_func : callable, optional
-        Function for time-varying fluid velocity v(t) [m/s].
-        If None, uses default constant velocity.
+    mass_flow_rate_func : callable, optional
+        Function for time-varying mass flow rate m_dot(t) [kg/s].
+        If None, uses default constant mass flow rate.
+        Velocity is computed as v = m_dot / (rho_ref * A) where A = π*D²/4.
     irradiance_func : callable, optional
         Function for time-varying solar irradiance I(t) [W/m²]
         (natural/direct normal irradiance before concentration).
         If None, uses default zero irradiance.
-    inlet_func : callable, optional
-        Function for time-varying inlet temperature T_inlet(t) [K].
+    T_inlet_func : callable, optional
+        Function for time-varying absorber inlet fluid temperature T_inlet(t) [K].
         If None, uses default constant inlet temperature.
     T_ref : float, default=ZERO_C + 300.0
         Reference temperature [K] for evaluating constant properties.
-    thermal_diffusivity : float, default=THERMAL_DIFFUSIVITY
-        Fluid thermal diffusivity α [m²/s].
     T_ambient : float, default=ZERO_C + 20.0
         Ambient temperature [K] for convective heat loss.
     pipe_diameter : float, default=0.07
@@ -165,6 +164,11 @@ def create_pipe_flow_model(
         If True, use constant h_int evaluated at T_ref using Dittus-Boelter.
         If False, use temperature-dependent h_int Expression based on local
         fluid properties at T_f[t, x] using Dittus-Boelter correlation.
+    axial_dispersion_coeff : float, default=1e-4
+        Axial dispersion coefficient D_ax [m²/s] for turbulent mixing.
+        This characterizes the effective axial spreading of heat due to
+        turbulent eddies, typically 2-3 orders of magnitude larger than
+        molecular thermal diffusivity.
 
     Returns
     -------
@@ -213,9 +217,6 @@ def create_pipe_flow_model(
     model.dT_p_dt = DerivativeVar(model.T_p, wrt=model.t)
     model.dT_p_dx = DerivativeVar(model.T_p, wrt=model.x)
     model.d2T_p_dx2 = DerivativeVar(model.T_p, wrt=(model.x, model.x))
-
-    # Fluid thermal diffusivity (always constant for now)
-    model.alpha_f = Param(initialize=thermal_diffusivity)  # [m²/s]
 
     # Fluid density: constant or temperature-dependent
     if constant_density:
@@ -267,6 +268,11 @@ def create_pipe_flow_model(
         def cp_f(m, t, x):
             return m.fluid_props.heat_capacity(m.T_f[t, x])
 
+    # Axial dispersion coefficient for turbulent flow [m²/s]
+    # This characterizes effective axial heat spreading due to turbulent mixing,
+    # typically 2-3 orders of magnitude larger than molecular thermal diffusivity
+    model.D_ax = Param(initialize=axial_dispersion_coeff)
+
     # Pipe properties
     model.rho_p = Param(initialize=pipe_density)  # [kg/m³]
     model.cp_p = Param(initialize=pipe_specific_heat)  # [J/kg·K]
@@ -278,11 +284,21 @@ def create_pipe_flow_model(
     model.d = Param(initialize=pipe_wall_thickness)  # [m]
     model.h_ext = Param(initialize=heat_transfer_coeff_ext)  # [W/m²·K]
 
-    # Default parameter functions if none provided
-    if velocity_func is None:
+    # Pipe cross-sectional area for mass flow rate to velocity conversion
+    pipe_area = np.pi * pipe_diameter**2 / 4.0
+    model.A = Param(initialize=pipe_area)  # [m²]
 
-        def velocity_func(t):
-            return 0.2  # velocity [m/s]
+    # Reference density for velocity calculation (constant)
+    rho_ref = fluid_props.density(T_ref)
+
+    # Default parameter functions if none provided
+    if mass_flow_rate_func is None:
+        # Default mass flow rate gives ~0.2 m/s at reference density
+        # m_dot = v * rho * A = 0.2 * rho_ref * A
+        default_m_dot = 0.2 * rho_ref * pipe_area
+
+        def mass_flow_rate_func(t):
+            return default_m_dot  # mass flow rate [kg/s]
 
     if irradiance_func is None:
 
@@ -293,15 +309,18 @@ def create_pipe_flow_model(
                 return 800.0
             return 0.0
 
-    if inlet_func is None:
+    if T_inlet_func is None:
 
-        def inlet_func(t):
-            return ZERO_C + 270.0
+        def T_inlet_func(t):
+            return ZERO_C + 270.0  # Absorber inlet fluid temperature [K]
 
     # Store functions for later use
-    model.velocity_func = velocity_func
+    model.mass_flow_rate_func = mass_flow_rate_func
     model.irradiance_func = irradiance_func
-    model.inlet_func = inlet_func
+    model.T_inlet_func = T_inlet_func
+
+    # Store reference density for velocity calculation
+    model.rho_ref = Param(initialize=rho_ref)
 
     # Solar collector parameters (Yebra & Rhinehart model)
     model.c = Param(initialize=concentration_factor)  # Concentration ratio
@@ -310,15 +329,28 @@ def create_pipe_flow_model(
     # Store heat transfer coefficient settings
     model.constant_heat_transfer_coeff = constant_heat_transfer_coeff
 
+    # Time-varying parameters (will be initialized after discretization)
+    model.m_dot = Param(model.t, mutable=True)  # Mass flow rate [kg/s]
+    model.I = Param(model.t, mutable=True)  # Solar irradiance [W/m²]
+    model.T_inlet = Param(model.t, mutable=True)
+
+    # Velocity as Expression: v(t, x) = m_dot(t) / (rho_f(t, x) * A)
+    # This correctly handles mass conservation when density varies with temperature
+    @model.Expression(model.t, model.x)
+    def v(m, t, x):
+        return m.m_dot[t] / (m.rho_f[t, x] * m.A)
+
     # Calculate h_int using Dittus-Boelter correlation
     # Get fluid properties at reference temperature for initial calculation
-    rho_ref = fluid_props.density(T_ref)
     eta_ref = fluid_props.viscosity(T_ref)
     lam_ref = fluid_props.thermal_conductivity(T_ref)
     cp_ref = fluid_props.heat_capacity(T_ref)
 
+    # Calculate initial velocity from mass flow rate
+    m_dot_initial = mass_flow_rate_func(0.0)
+    v_initial = m_dot_initial / (rho_ref * pipe_area)
+
     # Calculate h_int at T_ref for printing and constant case
-    v_initial = velocity_func(0.0)
     h_int_ref, Re_ref, Pr_ref, Nu_ref = (
         calculate_heat_transfer_coefficient_turbulent(
             v_initial,
@@ -335,6 +367,7 @@ def create_pipe_flow_model(
     else:
         print("Using temperature-dependent h_int (Dittus-Boelter):")
     print(f"  Reference temperature: {T_ref - ZERO_C:.0f}°C")
+    print(f"  Initial mass flow rate: {m_dot_initial:.3f} kg/s")
     print(f"  Initial velocity: {v_initial:.3f} m/s")
     print(f"  Reynolds number at T_ref: {Re_ref:.0f}")
     print(f"  Prandtl number at T_ref: {Pr_ref:.1f}")
@@ -361,22 +394,17 @@ def create_pipe_flow_model(
             eta = m.eta_f[t, x]
             lam = m.lam_f[t, x]
             cp = m.cp_f[t, x]
-            v = m.v[t]
+            local_v = m.v[t, x]
             D = m.D
 
             # Reynolds number
-            Re = rho * v * D / eta
+            Re = rho * local_v * D / eta
             # Prandtl number
             Pr = eta * cp / lam
             # Nusselt number (Dittus-Boelter)
             Nu = 0.023 * Re**0.8 * Pr**0.4
             # Heat transfer coefficient
             return Nu * lam / D
-
-    # Time-varying parameters (will be initialized after discretization)
-    model.v = Param(model.t, mutable=True)
-    model.I = Param(model.t, mutable=True)  # Solar irradiance [W/m²]
-    model.T_inlet = Param(model.t, mutable=True)
 
     return model
 
@@ -406,11 +434,12 @@ def add_pde_constraints(model):
         heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
 
         # Fluid PDE: (energy balance)
-        #   ρcp ∂T_f/∂t + ρcp v(t)∂T_f/∂x = ρcp α_f∂²T_f/∂x² + q_to_fluid
+        #   ρcp ∂T_f/∂t + ρcp v(t,x)∂T_f/∂x = ρcp D_ax ∂²T_f/∂x² + q_to_fluid
+        # Note: v(t,x) = m_dot(t) / (rho_f(t,x) * A) to conserve mass
         rho_cp = m.rho_f[t, x] * m.cp_f[t, x]
         return (
-            rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t] * m.dT_f_dx[t, x]
-            == rho_cp * m.alpha_f * m.d2T_f_dx2[t, x] + heat_to_fluid
+            rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t, x] * m.dT_f_dx[t, x]
+            == rho_cp * m.D_ax * m.d2T_f_dx2[t, x] + heat_to_fluid
         )
 
     # Pipe wall temperature PDE constraint
@@ -593,14 +622,13 @@ def solve_model(
 
     # Initialize time-varying parameters after discretization
     for t in model.t:
-        velocity_t = model.velocity_func(t)
-        model.v[t].set_value(velocity_t)
+        model.m_dot[t].set_value(model.mass_flow_rate_func(t))
         model.I[t].set_value(model.irradiance_func(t))
-        model.T_inlet[t].set_value(model.inlet_func(t))
+        model.T_inlet[t].set_value(model.T_inlet_func(t))
 
         # Note: h_int was already calculated in create_pipe_flow_model using
-        # Dittus-Boelter correlation if use_dittus_boelter=True. For now, h_int
-        # is spatially uniform and constant in time (evaluated at T_ref).
+        # Dittus-Boelter correlation. Velocity v(t,x) is computed as an
+        # Expression from m_dot(t) and rho_f(t,x) to conserve mass.
 
     # Provide good initial guess for temperature fields
     for t in model.t:

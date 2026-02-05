@@ -542,7 +542,7 @@ def make_comparison_plot(
     plt.tight_layout()
     filename = f"{fluid.name}_{property_name}_comparison.png".replace(" ", "_")
     plt.savefig(plot_dir / filename, dpi=dpi)
-    plt.show()
+    plt.close()
 
     # --- Plot 2: Residuals ---
     fig2, ax2 = plt.subplots(figsize=figsize)
@@ -584,9 +584,111 @@ def make_comparison_plot(
     plt.tight_layout()
     filename = f"{fluid.name}_{property_name}_residuals.png".replace(" ", "_")
     plt.savefig(plot_dir / filename, dpi=dpi)
-    plt.show()
+    plt.close()
 
     return {"rmse": rmse, "mae": mae, "mape": mape, "r_squared": r_squared}
+
+
+def make_thermal_diffusivity_plot(
+    fluid,
+    T_range_C=(150, 400),
+    plot_dir="plots",
+    figsize=(6, 3),
+    dpi=300,
+):
+    """
+    Make plot of molecular thermal diffusivity vs temperature.
+
+    This shows the molecular thermal diffusivity α = k/(ρ·cp), which characterizes
+    heat conduction through a stationary medium. Note that for turbulent pipe flow,
+    heat transport is dominated by turbulent mixing, characterized by the axial
+    dispersion coefficient D_ax (typically 2-3 orders of magnitude larger).
+
+    Since thermal diffusivity is calculated from other properties, there is no
+    manufacturer data to compare against.
+
+    Parameters
+    ----------
+    fluid : FluidProperties
+        Fluid properties object
+    T_range_C : tuple
+        Temperature range in Celsius (min, max) for plotting
+    plot_dir : str or Path
+        Directory to save plot
+    figsize : tuple
+        Figure size
+    dpi : int
+        Resolution for saved figure
+    """
+    plot_dir = Path(plot_dir)
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    # Temperature range for plotting
+    T_min_plot = T_range_C[0] + 273.15
+    T_max_plot = T_range_C[1] + 273.15
+    T_plot = np.linspace(T_min_plot, T_max_plot, 100)
+    T_C_plot = T_plot - 273.15
+
+    # Valid temperature range in Celsius
+    T_min_C = fluid.T_min - 273.15
+    T_max_C = fluid.T_max - 273.15
+
+    # Calculate thermal diffusivity
+    alpha = fluid.thermal_diffusivity(T_plot)
+
+    # --- Plot: Thermal Diffusivity ---
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.axvspan(T_min_C, T_max_C, alpha=0.15, color="green")
+    ax.plot(T_C_plot, alpha * 1e7, "m-", linewidth=2, label="model")
+    ax.set_xlabel("Temperature [°C]")
+    ax.set_ylabel("Thermal Diffusivity [×10⁻⁷ m²/s]")
+    ax.set_title("Molecular Thermal Diffusivity (α = k/(ρ·cp))")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Add valid range indicator near top of plot
+    y_min, y_max = ax.get_ylim()
+    y_pos = y_min + 0.9 * (y_max - y_min)
+    ax.annotate(
+        "",
+        xy=(T_max_C, y_pos),
+        xytext=(T_min_C, y_pos),
+        arrowprops={
+            "arrowstyle": "<->",
+            "color": "green",
+            "lw": 1,
+            "shrinkA": 0,
+            "shrinkB": 0,
+        },
+    )
+    T_mid_C = (T_min_C + T_max_C) / 2
+    y_text = y_pos + 0.02 * (y_max - y_min)
+    ax.text(
+        T_mid_C,
+        y_text,
+        "Valid temperature range",
+        ha="center",
+        va="bottom",
+        fontsize=8,
+        color="green",
+    )
+
+    plt.tight_layout()
+    filename = f"{fluid.name}_thermal_diffusivity.png".replace(" ", "_")
+    plt.savefig(plot_dir / filename, dpi=dpi)
+    plt.close()
+
+    # Print values at key temperatures
+    print("\nMolecular Thermal Diffusivity (α = k/(ρ·cp)):")
+    print(
+        f"  At {T_min_C:.0f}°C: {fluid.thermal_diffusivity(fluid.T_min):.4e} m²/s"
+    )
+    print(
+        f"  At {T_max_C:.0f}°C: {fluid.thermal_diffusivity(fluid.T_max):.4e} m²/s"
+    )
+    print(f"  At 300°C:  {fluid.thermal_diffusivity(573.15):.4e} m²/s")
+
+    return {"filename": str(plot_dir / filename)}
 
 
 def load_manufacturer_data():
@@ -714,6 +816,10 @@ def validate_correlations(fluid, data):
                 fluid, filtered_data["T_K"], filtered_data[prop_key], prop_key
             )
             results[prop_key] = stats
+
+    # Generate thermal diffusivity plot (no manufacturer data available)
+    print("\nMolecular Thermal Diffusivity:")
+    make_thermal_diffusivity_plot(fluid)
 
     # Summary table
     print("\n\nValidation Summary:")

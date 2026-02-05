@@ -2,6 +2,8 @@
 \usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage{siunitx}
+\usepackage[numbers]{natbib}
+\usepackage{url}
 
 \title{Parabolic Trough Solar Collector Flow Simulation Model}
 \author{William Tubbs}
@@ -13,7 +15,7 @@
 
 \section{Fluid Properties} \label{sec:fluid_properties}
 
-The heat transfer fluid is SYLTHERM™ 800, a product manufactured by the Dow chemical company [ref]. This is a thermal oil specially formulated for high-temperature liquid phase heat transfer applications. According to Dow, it is a stable, long-lasting silicone polymer with a recommended operating temperature range of -40 to 400°C.
+The heat transfer fluid is SYLTHERM™ 800, a product manufactured by Dow \citep{dow2001syltherm800}. This is a thermal oil specially formulated for high-temperature liquid phase heat transfer applications. According to Dow, it is a stable, long-lasting silicone polymer with a recommended operating temperature range of -40 to 400°C.
 
 Since the properties of SYLTHERM™ 800 vary with temperature, we developed formulas to simulate the variations of the properties of interest by fitting simple models to data published by the manufacturer. The models were fitted to a subset of the manufacturer's data for temperatures between 200 and 400°C.
 
@@ -26,7 +28,7 @@ Figure~\ref{fig:density} shows how well the model compares to the manufacturer's
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.8\textwidth]{images/SYLTHERM_800_density_comparison.png}
-\caption{Density model comparison with manufacturer data.}
+\caption{Density model.}
 \label{fig:density}
 \end{figure}
 
@@ -40,7 +42,7 @@ Figure~\ref{fig:heat_capacity} shows how well the model compares to the manufact
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.8\textwidth]{images/SYLTHERM_800_heat_capacity_comparison.png}
-\caption{Heat capacity model comparison with manufacturer data.}
+\caption{Heat capacity model.}
 \label{fig:heat_capacity}
 \end{figure}
 
@@ -53,7 +55,7 @@ Figure~\ref{fig:thermal_conductivity} shows how well the model compares to the m
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.8\textwidth]{images/SYLTHERM_800_thermal_conductivity_comparison.png}
-\caption{Thermal conductivity model comparison with manufacturer data.}
+\caption{Thermal conductivity model.}
 \label{fig:thermal_conductivity}
 \end{figure}
 
@@ -66,7 +68,7 @@ Figure~\ref{fig:viscosity} shows how well the model compares to the manufacturer
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.8\textwidth]{images/SYLTHERM_800_viscosity_comparison.png}
-\caption{Viscosity model comparison with manufacturer data.}
+\caption{Viscosity model.}
 \label{fig:viscosity}
 \end{figure}
 
@@ -79,13 +81,13 @@ Figure~\ref{fig:vapor_pressure} shows how well the model compares to the manufac
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.8\textwidth]{images/SYLTHERM_800_vapor_pressure_comparison.png}
-\caption{Vapor pressure model comparison with manufacturer data.}
+\caption{Vapor pressure model.}
 \label{fig:vapor_pressure}
 \end{figure}
 
 \section{Heat Transfer} \label{sec:heat_transfer}
 
-The convective heat transfer coefficient for the oil flowing inside the absorber pipe was calculated using the Dittus-Boelter correlation, an empirical relationship for turbulent flow in smooth pipes. This correlation relates the Nusselt number to the Reynolds and Prandtl numbers and is valid for fully developed turbulent flow with moderate temperature differences.
+The convective heat transfer coefficient for the oil flowing inside the absorber pipe was calculated using the Dittus-Boelter correlation \citep{incropera2007heat}, an empirical relationship for turbulent flow in smooth pipes. This correlation relates the Nusselt number to the Reynolds and Prandtl numbers and is valid for fully developed turbulent flow with moderate temperature differences.
 
 The Dittus-Boelter correlation is given by \eqref{eq:dittus-boelter}.
 \begin{equation}
@@ -158,7 +160,7 @@ $\rho_f$ & Fluid density & \si{\kilogram\per\cubic\meter} \\
 $c_{p,f}$ & Fluid specific heat capacity & \si{\joule\per\kilogram\per\kelvin} \\
 $k_f$ & Fluid thermal conductivity & \si{\watt\per\meter\per\kelvin} \\
 $\mu_f$ & Fluid dynamic viscosity & \si{\pascal\second} \\
-$\alpha_f$ & Fluid thermal diffusivity & \si{\square\meter\per\second} \\
+$D_{ax}$ & Axial dispersion coefficient & \si{\square\meter\per\second} \\
 $h_{\text{int}}$ & Internal heat transfer coefficient & \si{\watt\per\square\meter\per\kelvin} \\
 \hline
 \multicolumn{3}{l}{\textit{Pipe properties (constant)}} \\
@@ -201,7 +203,7 @@ where $A = \pi D^2/4$ is the pipe cross-sectional area. When density is constant
 
 The fluid temperature $T_f(x,t)$ is governed by the advection-diffusion equation with a source term representing heat transfer from the pipe wall:
 \begin{equation}
-\rho_f c_{p,f} \frac{\partial T_f}{\partial t} + \rho_f c_{p,f} v \frac{\partial T_f}{\partial x} = \rho_f c_{p,f} \alpha_f \frac{\partial^2 T_f}{\partial x^2} + \dot{q}_{\text{wall}\rightarrow\text{fluid}}
+\rho_f c_{p,f} \frac{\partial T_f}{\partial t} + \rho_f c_{p,f} v \frac{\partial T_f}{\partial x} = \rho_f c_{p,f} D_{ax} \frac{\partial^2 T_f}{\partial x^2} + \dot{q}_{\text{wall}\rightarrow\text{fluid}}
 \label{eq:fluid_pde}
 \end{equation}
 where the heat transfer rate from the pipe wall to the fluid per unit volume is:
@@ -211,7 +213,9 @@ where the heat transfer rate from the pipe wall to the fluid per unit volume is:
 \end{equation}
 This expression is derived by considering the heat transfer through the inner pipe surface (area $\pi D$ per unit length) distributed over the fluid volume (cross-sectional area $\pi D^2/4$).
 
-Note that in \eqref{eq:fluid_pde}, the fluid properties $\rho_f$, $c_{p,f}$, $\alpha_f$, and the heat transfer coefficient $h_{\text{int}}$ may be either constant or functions of the local fluid temperature $T_f(t,x)$. The temperature-dependent correlations for fluid properties are given in Section~\ref{sec:fluid_properties}, and the heat transfer coefficient calculation is described in Section~\ref{sec:heat_transfer}.
+Note that in \eqref{eq:fluid_pde}, the fluid properties $\rho_f$, $c_{p,f}$, and the heat transfer coefficient $h_{\text{int}}$ may be either constant or functions of the local fluid temperature $T_f(t,x)$. The temperature-dependent correlations for fluid properties are given in Section~\ref{sec:fluid_properties}, and the heat transfer coefficient calculation is described in Section~\ref{sec:heat_transfer}.
+
+The axial dispersion coefficient $D_{ax}$ characterizes the effective spreading of heat in the axial direction due to turbulent mixing. For turbulent pipe flow, this coefficient is typically 2--3 orders of magnitude larger than the molecular thermal diffusivity $\alpha = k_f/(\rho_f c_{p,f})$, reflecting the dominant role of turbulent eddies in axial heat transport. The model treats $D_{ax}$ as a constant parameter.
 
 \subsubsection{Pipe Wall Energy Balance}
 
@@ -299,7 +303,7 @@ T_f(0, x) = T_{f,0}, \qquad T_p(0, x) = T_{p,0}
 
 \subsection{Numerical Solution}
 
-The coupled PDEs are solved using the method of lines with finite difference discretization. The spatial domain is discretized using central differences (second-order accuracy), while the temporal domain uses backward Euler (implicit) discretization for numerical stability. The resulting system of differential-algebraic equations (DAEs) is solved using the IPOPT nonlinear optimization solver within the Pyomo framework.
+The coupled PDEs are solved using the method of lines with finite difference discretization. The spatial domain is discretized using central differences (second-order accuracy), while the temporal domain uses backward Euler (implicit) discretization for numerical stability. The resulting system of differential-algebraic equations (DAEs) is solved using the IPOPT nonlinear optimization solver within the Pyomo framework \citep{bynum2021pyomo, hart2011pyomo}.
 
 The default model parameters used in the simulations are summarized in Table~\ref{tab:model_parameters}.
 
@@ -313,11 +317,11 @@ Parameter & Symbol & Value & Units \\
 \hline
 \multicolumn{4}{l}{\textit{Heat transfer fluid (Syltherm 800 at $T_{\text{ref}} = 300$°C)}} \\
 \hline
-Density & $\rho_f$ & $\rho_f(T_{\text{ref}})$ & \si{\kilogram\per\cubic\meter} \\
-Specific heat & $c_{p,f}$ & $c_{p,f}(T_{\text{ref}})$ & \si{\joule\per\kilogram\per\kelvin} \\
-Thermal conductivity & $k_f$ & $k_f(T_{\text{ref}})$ & \si{\watt\per\meter\per\kelvin} \\
-Dynamic viscosity & $\mu_f$ & $\mu_f(T_{\text{ref}})$ & \si{\pascal\second} \\
-Thermal diffusivity & $\alpha_f$ & 0.25 & \si{\square\meter\per\second} \\
+Density & $\rho_f$ & 671.0 & \si{\kilogram\per\cubic\meter} \\
+Specific heat & $c_{p,f}$ & 2086 & \si{\joule\per\kilogram\per\kelvin} \\
+Thermal conductivity & $k_f$ & 0.0824 & \si{\watt\per\meter\per\kelvin} \\
+Dynamic viscosity & $\mu_f$ & $4.7 \times 10^{-4}$ & \si{\pascal\second} \\
+Axial dispersion coeff. & $D_{ax}$ & $1 \times 10^{-4}$ & \si{\square\meter\per\second} \\
 \hline
 \multicolumn{4}{l}{\textit{Absorber pipe (steel)}} \\
 \hline
@@ -337,5 +341,8 @@ Optical efficiency & $\epsilon$ & 0.8 & -- \\
 \hline
 \end{tabular}
 \end{table}
+
+\bibliographystyle{unsrtnat}
+\bibliography{references}
 
 \end{document}
