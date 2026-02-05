@@ -63,7 +63,7 @@ HEAT_TRANSFER_COEFF_INT = 10.0  # W/m²·K (internal, pipe-to-fluid)
 HEAT_TRANSFER_COEFF_EXT = 20.0  # W/m²·K (external, pipe-to-ambient)
 PIPE_DIAMETER = 0.07  # m
 PIPE_WALL_THICKNESS = 0.006  # m
-COLLECTOR_LENGTH = 100.0  # m
+COLLECTOR_LENGTH = 96.0  # m
 PIPE_THERMAL_CONDUCTIVITY = 50.0  # W/m·K (typical for steel)
 PIPE_DENSITY = 7850.0  # kg/m³ (steel)
 PIPE_SPECIFIC_HEAT = 450.0  # J/kg·K (steel)
@@ -244,16 +244,16 @@ def create_pipe_flow_model(
 
     # Fluid thermal conductivity: constant or temperature-dependent
     if constant_thermal_conductivity:
-        model._lam_f_const = Param(
+        model._k_f_const = Param(
             initialize=fluid_props.thermal_conductivity(T_ref)
         )
 
         @model.Expression(model.t, model.x)
-        def lam_f(m, t, x):
-            return m._lam_f_const
+        def k_f(m, t, x):
+            return m._k_f_const
     else:
         @model.Expression(model.t, model.x)
-        def lam_f(m, t, x):
+        def k_f(m, t, x):
             return m.fluid_props.thermal_conductivity(m.T_f[t, x])
 
     # Fluid specific heat: constant or temperature-dependent
@@ -392,7 +392,7 @@ def create_pipe_flow_model(
             # Get local fluid properties (may be constant or T-dependent)
             rho = m.rho_f[t, x]
             eta = m.eta_f[t, x]
-            lam = m.lam_f[t, x]
+            k = m.k_f[t, x]
             cp = m.cp_f[t, x]
             local_v = m.v[t, x]
             D = m.D
@@ -400,19 +400,44 @@ def create_pipe_flow_model(
             # Reynolds number
             Re = rho * local_v * D / eta
             # Prandtl number
-            Pr = eta * cp / lam
+            Pr = eta * cp / k
             # Nusselt number (Dittus-Boelter)
             Nu = 0.023 * Re**0.8 * Pr**0.4
             # Heat transfer coefficient
-            return Nu * lam / D
+            return Nu * k / D
 
     return model
 
 
-def add_pde_constraints(model):
+def add_pde_constraints(
+    model,
+    T_f_initial=ZERO_C + 270.0,
+    T_p_initial=ZERO_C + 210.0,
+):
     """
-    Add PDE constraints and boundary/initial conditions for both temperatures
+    Add PDE constraints and boundary/initial conditions for both temperatures.
+
+    Parameters
+    ----------
+    model : pyomo.ConcreteModel
+        The Pyomo model created by create_pipe_flow_model().
+    T_f_initial : float or array-like, default=ZERO_C + 270.0
+        Initial fluid temperature [K] at t=0. If float, uniform temperature
+        for all x > 0. If array, must match the number of x points after
+        discretization (values are mapped to x positions in order).
+    T_p_initial : float or array-like, default=ZERO_C + 210.0
+        Initial pipe wall temperature [K] at t=0. If float, uniform
+        temperature for all x. If array, must match the number of x points.
+
+    Returns
+    -------
+    model : pyomo.ConcreteModel
+        The model with PDE constraints, initial conditions, and boundary
+        conditions added.
     """
+    # Store initial conditions on model for use in constraints
+    model.T_f_initial = T_f_initial
+    model.T_p_initial = T_p_initial
 
     # Fluid temperature PDE constraint
     @model.Constraint(model.t, model.x)
@@ -525,16 +550,29 @@ def add_pde_constraints(model):
             )
 
     # Initial conditions
+    # Get sorted x values for array indexing
+    x_vals = sorted(model.x)
+
     @model.Constraint(model.x)
     def fluid_initial_condition(m, x):
         if x == 0:
             return Constraint.Skip
-        T_0 = ZERO_C + 270.0  # initial fluid temperature
+        # Handle float or array initial condition
+        if np.isscalar(m.T_f_initial):
+            T_0 = m.T_f_initial
+        else:
+            idx = x_vals.index(x)
+            T_0 = m.T_f_initial[idx]
         return m.T_f[0, x] == T_0
 
     @model.Constraint(model.x)
     def wall_initial_condition(m, x):
-        T_0 = ZERO_C + 210.0  # initial wall temperature
+        # Handle float or array initial condition
+        if np.isscalar(m.T_p_initial):
+            T_0 = m.T_p_initial
+        else:
+            idx = x_vals.index(x)
+            T_0 = m.T_p_initial[idx]
         return m.T_p[0, x] == T_0
 
     # Inlet boundary condition for fluid

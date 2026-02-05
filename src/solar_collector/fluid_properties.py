@@ -54,8 +54,9 @@ class FluidProperties:
                     f"Warning: Temperature outside valid range "
                     f"({T_min_C:.0f}°C to {T_max_C:.0f}°C)"
                 )
-        except (TypeError, ValueError):
+        except Exception:
             # Skip check for symbolic types (Pyomo Var, CasADi MX, etc.)
+            # Catches PyomoException when comparing symbolic expressions
             pass
 
     def density(self, T):

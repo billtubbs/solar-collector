@@ -48,7 +48,7 @@ FLUID_DENSITY = 800  # kg/m³
 SPECIFIC_HEAT = 2000.0  # J/kg·K
 HEAT_TRANSFER_COEFF_EXT = 10.0  # W/m²·K
 PIPE_DIAMETER = 0.07  # m
-COLLECTOR_LENGTH = 100.0  # m
+COLLECTOR_LENGTH = 96.0  # m
 
 # Solar collector parameters (based on Yebra & Rhinehart model)
 MIRROR_WIDTH = 5.76  # m (width of parabolic mirrors)

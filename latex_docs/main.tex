@@ -5,7 +5,7 @@
 \usepackage[numbers]{natbib}
 \usepackage{url}
 
-\title{Parabolic Trough Solar Collector Flow Simulation Model}
+\title{Parabolic Trough Solar Collector Simulation Model}
 \author{William Tubbs}
 \date{February 2026}
 
@@ -19,7 +19,7 @@ The heat transfer fluid is SYLTHERM™ 800, a product manufactured by Dow \citep
 
 Since the properties of SYLTHERM™ 800 vary with temperature, we developed formulas to simulate the variations of the properties of interest by fitting simple models to data published by the manufacturer. The models were fitted to a subset of the manufacturer's data for temperatures between 200 and 400°C.
 
-The density of the fluid, $\rho_f$, as a function of its temperature, $T_f$, in \si{\kelvin} was simulated using the quadratic model in \eqref{eq:rhof}.
+The density of the fluid, $\rho_f$, as a function of its temperature, $T_f$, in \si{\kelvin} was simulated using the quadratic model:
 \begin{equation}
 \rho_f = 960.73 + 0.11489 \cdot T_f - 1.082 \times 10^{-3} \cdot T_f^2 \quad [\text{kg}/\text{m}^3] \label{eq:rhof}
 \end{equation}
@@ -32,7 +32,7 @@ Figure~\ref{fig:density} shows how well the model compares to the manufacturer's
 \label{fig:density}
 \end{figure}
 
-The specific heat capacity of the fluid, $c_{p,f}$, as a function of its temperature was simulated using the linear model in \eqref{eq:cpf}.
+The specific heat capacity of the fluid, $c_{p,f}$, as a function of its temperature was simulated using the linear model:
 \begin{equation}
 c_{p,f} = 1108.027 + 1.70714 \cdot T_f \quad \left[\si{\joule\per\kilogram\per\kelvin}\right]
 \label{eq:cpf}
@@ -46,7 +46,7 @@ Figure~\ref{fig:heat_capacity} shows how well the model compares to the manufact
 \label{fig:heat_capacity}
 \end{figure}
 
-The thermal conductivity of the fluid, $k_f$, as a function of its temperature was simulated using the linear model in \eqref{eq:kf}.
+The thermal conductivity of the fluid, $k_f$, as a function of its temperature was simulated using the linear model:
 \begin{equation}
 k_f = 0.19091 - 1.894 \times 10^{-4} \cdot T_f \quad [\text{W}/(\text{m}\cdot\text{K})] \label{eq:kf}
 \end{equation}
@@ -59,7 +59,7 @@ Figure~\ref{fig:thermal_conductivity} shows how well the model compares to the m
 \label{fig:thermal_conductivity}
 \end{figure}
 
-The dynamic viscosity of the fluid, $\mu_f$, as a function of its temperature was simulated using the Andrade equation with offset in \eqref{eq:muf}.
+The dynamic viscosity of the fluid, $\mu_f$, as a function of its temperature was simulated using the Andrade equation with an offset parameter:
 \begin{equation}
 \mu_f = 3.941 \times 10^{-5} \cdot \exp\left(\frac{1637.0}{T_f}\right) - 2.115 \times 10^{-4} \quad [\text{Pa}\cdot\text{s}] \label{eq:muf}
 \end{equation}
@@ -72,7 +72,7 @@ Figure~\ref{fig:viscosity} shows how well the model compares to the manufacturer
 \label{fig:viscosity}
 \end{figure}
 
-The vapor pressure of the fluid, $P_f$, as a function of its temperature was simulated using the Antoine equation in \eqref{eq:Pf}, where $T_C = T_f - 273.15$ is the temperature in \si{\degreeCelsius}.
+The vapor pressure of the fluid, $P_f$, as a function of its temperature was simulated using the Antoine equation, where $T_C = T_f - 273.15$ is the temperature in \si{\degreeCelsius}:
 \begin{equation}
 \log_{10}(P_f) = 7.9938 - \frac{964.133}{119.431 + T_C} \quad [\text{Pa}] \label{eq:Pf}
 \end{equation}
@@ -85,40 +85,9 @@ Figure~\ref{fig:vapor_pressure} shows how well the model compares to the manufac
 \label{fig:vapor_pressure}
 \end{figure}
 
-\section{Heat Transfer} \label{sec:heat_transfer}
+\section{Solar Collector Model} \label{sec:solar_collector}
 
-The convective heat transfer coefficient for the oil flowing inside the absorber pipe was calculated using the Dittus-Boelter correlation \citep{incropera2007heat}, an empirical relationship for turbulent flow in smooth pipes. This correlation relates the Nusselt number to the Reynolds and Prandtl numbers and is valid for fully developed turbulent flow with moderate temperature differences.
-
-The Dittus-Boelter correlation is given by \eqref{eq:dittus-boelter}.
-\begin{equation}
-\text{Nu} = 0.023 \cdot \text{Re}^{0.8} \cdot \text{Pr}^{0.4} \label{eq:dittus-boelter}
-\end{equation}
-where $\text{Nu} = h D / k_f$ is the Nusselt number, $\text{Re} = \rho_f v D / \mu_f$ is the Reynolds number, and $\text{Pr} = \mu_f c_{p,f} / k_f$ is the Prandtl number. Here, $h$ is the convective heat transfer coefficient [\si{\watt\per\square\meter\per\kelvin}], $D$ is the inner diameter of the absorber tube [\si{\meter}], and $v$ is the fluid velocity [\si{\meter\per\second}].
-
-The heat transfer coefficient is then obtained from the Nusselt number as shown in \eqref{eq:htc}.
-\begin{equation}
-h = \frac{\text{Nu} \cdot k_f}{D} \label{eq:htc}
-\end{equation}
-
-Consequently, the heat transfer rate depends on the fluid properties and flow velocity, as well as the temperature difference. This correlation is valid for $\text{Re} > 10{,}000$ and $0.7 \leq \text{Pr} \leq 160$, with an accuracy of approximately $\pm 25\%$ for most engineering applications.
-
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.8\textwidth]{images/reynolds_number_vs_velocity.png}
-\caption{Reynold's number for absorber pipe flow.}
-\label{fig:re_vs_v}
-\end{figure}
-
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.8\textwidth]{images/heat_transfer_coeff_vs_velocity.png}
-\caption{Heat transfer coefficient between pipe wall and fluid.}
-\label{fig:h_vs_v_and_Tf}
-\end{figure}
-
-\section{Flow Model} \label{sec:flow_model}
-
-This section describes the mathematical model used to simulate the thermal dynamics of the solar collector. The model is based on a one-dimensional partial differential equation (PDE) formulation that tracks both the fluid temperature and the absorber pipe wall temperature along the length of the collector.
+This section describes the mathematical model used to simulate the thermal dynamics of the solar collector. The model is based on a one-dimensional partial differential equation (PDE) formulation that tracks both the fluid temperature and the absorber pipe wall temperature along the length of a collector.
 
 \subsection{Model Overview}
 
@@ -192,7 +161,7 @@ $T_{\text{ref}}$ & Reference temperature for constant properties & \si{\kelvin} 
 
 \subsubsection{Mass Flow Rate and Velocity}
 
-The model uses mass flow rate $\dot{m}(t)$ as the primary flow input rather than velocity, since mass flow rate is conserved along the pipe length. The local fluid velocity is computed from mass conservation:
+The model uses mass flow rate $\dot{m}(t)$ as the primary flow input since it is conserved along the pipe length. The local fluid velocity is computed from mass conservation:
 \begin{equation}
 v(t,x) = \frac{\dot{m}(t)}{\rho_f(t,x) \cdot A}
 \label{eq:velocity}
@@ -213,7 +182,7 @@ where the heat transfer rate from the pipe wall to the fluid per unit volume is:
 \end{equation}
 This expression is derived by considering the heat transfer through the inner pipe surface (area $\pi D$ per unit length) distributed over the fluid volume (cross-sectional area $\pi D^2/4$).
 
-Note that in \eqref{eq:fluid_pde}, the fluid properties $\rho_f$, $c_{p,f}$, and the heat transfer coefficient $h_{\text{int}}$ may be either constant or functions of the local fluid temperature $T_f(t,x)$. The temperature-dependent correlations for fluid properties are given in Section~\ref{sec:fluid_properties}, and the heat transfer coefficient calculation is described in Section~\ref{sec:heat_transfer}.
+Note that in \eqref{eq:fluid_pde}, the fluid properties $\rho_f$, $c_{p,f}$, and the heat transfer coefficient $h_{\text{int}}$ may be either constant or functions of the local fluid temperature $T_f(t,x)$. The temperature-dependent correlations for fluid properties are given in Section~\ref{sec:fluid_properties}.
 
 The axial dispersion coefficient $D_{ax}$ characterizes the effective spreading of heat in the axial direction due to turbulent mixing. For turbulent pipe flow, this coefficient is typically 2--3 orders of magnitude larger than the molecular thermal diffusivity $\alpha = k_f/(\rho_f c_{p,f})$, reflecting the dominant role of turbulent eddies in axial heat transport. The model treats $D_{ax}$ as a constant parameter.
 
@@ -269,13 +238,39 @@ The fluid properties that may be temperature-dependent are density ($\rho_f$), d
 
 \subsubsection{Internal Heat Transfer Coefficient}
 
-The internal heat transfer coefficient $h_{\text{int}}$ characterizes the convective heat transfer between the pipe wall and the flowing fluid. It is calculated using the Dittus-Boelter correlation \eqref{eq:dittus-boelter} described in Section~\ref{sec:heat_transfer}, with the heat transfer coefficient obtained from \eqref{eq:htc}.
+The internal heat transfer coefficient $h_{\text{int}}$ characterizes the convective heat transfer between the pipe wall and the flowing fluid. It is calculated using the Dittus-Boelter correlation \citep{incropera2007heat}, an empirical relationship for turbulent flow in smooth pipes. This correlation relates the Nusselt number to the Reynolds and Prandtl numbers and is valid for fully developed turbulent flow with moderate temperature differences.
+
+The Dittus-Boelter correlation is given by:
+\begin{equation}
+\text{Nu} = 0.023 \cdot \text{Re}^{0.8} \cdot \text{Pr}^{0.4} \label{eq:dittus-boelter}
+\end{equation}
+where $\text{Nu} = h D / k_f$ is the Nusselt number, $\text{Re} = \rho_f v D / \mu_f$ is the Reynolds number, and $\text{Pr} = \mu_f c_{p,f} / k_f$ is the Prandtl number. The heat transfer coefficient is then obtained from the Nusselt number:
+\begin{equation}
+h_{\text{int}} = \frac{\text{Nu} \cdot k_f}{D} \label{eq:htc}
+\end{equation}
+This correlation is valid for $\text{Re} > 10{,}000$ and $0.7 \leq \text{Pr} \leq 160$, with an accuracy of approximately $\pm 25\%$ for most engineering applications.
 
 Like the fluid properties, $h_{\text{int}}$ can be either:
 \begin{itemize}
     \item \textbf{Constant}: Calculated once using properties at $T_{\text{ref}}$ and the initial velocity.
     \item \textbf{Temperature-dependent}: Calculated at each point $(t,x)$ using local fluid properties and velocity, giving $h_{\text{int}}(t,x)$.
 \end{itemize}
+
+Figures~\ref{fig:re_vs_v} and \ref{fig:h_vs_v_and_Tf} show the Reynolds number and heat transfer coefficient as functions of fluid velocity for the absorber pipe.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{images/reynolds_number_vs_velocity.png}
+\caption{Reynolds number for absorber pipe flow.}
+\label{fig:re_vs_v}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{images/heat_transfer_coeff_vs_velocity.png}
+\caption{Heat transfer coefficient between pipe wall and fluid.}
+\label{fig:h_vs_v_and_Tf}
+\end{figure}
 
 \subsection{Boundary and Initial Conditions}
 
@@ -325,7 +320,7 @@ Axial dispersion coeff. & $D_{ax}$ & $1 \times 10^{-4}$ & \si{\square\meter\per\
 \hline
 \multicolumn{4}{l}{\textit{Absorber pipe (steel)}} \\
 \hline
-Length & $L$ & 100 & \si{\meter} \\
+Length & $L$ & 96 & \si{\meter} \\
 Inner diameter & $D$ & 0.07 & \si{\meter} \\
 Wall thickness & $d$ & 0.006 & \si{\meter} \\
 Density & $\rho_p$ & 7850 & \si{\kilogram\per\cubic\meter} \\
