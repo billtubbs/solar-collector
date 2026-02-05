@@ -21,6 +21,10 @@ DEFAULT_FLUID_THERMAL_CONDUCTIVITY = 0.12  # W/m·K (typical thermal oil)
 DEFAULT_FLUID_DYNAMIC_VISCOSITY = 0.01  # Pa·s (typical thermal oil)
 NUSSELT_NUMBER_LAMINAR = 4.36
 
+# Flow regime thresholds (Reynolds number)
+RE_LAMINAR_MAX = 2300  # Upper limit for laminar flow
+RE_TURBULENT_MIN = 4000  # Lower limit for fully turbulent flow
+
 # Default colormap for temperature-dependent plots
 DEFAULT_COLORMAP = "plasma"
 
@@ -197,32 +201,148 @@ def get_flow_regime(reynolds_number):
     """
     Determine flow regime based on Reynolds number
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     reynolds_number : float
         Reynolds number [-]
 
-    Returns:
-    --------
+    Returns
+    -------
     regime : str
         Flow regime: 'laminar', 'transitional', or 'turbulent'
     """
-    if reynolds_number < 2300:
+    if reynolds_number < RE_LAMINAR_MAX:
         return "laminar"
-    elif reynolds_number < 4000:
+    elif reynolds_number < RE_TURBULENT_MIN:
         return "transitional"
     else:
         return "turbulent"
+
+
+def estimate_pressure_drop_laminar(
+    velocity, pipe_length, pipe_diameter, fluid_density, fluid_viscosity,
+    check_regime=True
+):
+    """
+    Estimate pressure drop for laminar flow using Darcy-Weisbach equation.
+
+    Uses Hagen-Poiseuille friction factor: f = 64/Re.
+    Compatible with Pyomo/CasADi symbolic types when check_regime=False.
+
+    Parameters
+    ----------
+    velocity : float or symbolic
+        Fluid velocity [m/s]
+    pipe_length : float or symbolic
+        Pipe length [m]
+    pipe_diameter : float or symbolic
+        Pipe inner diameter [m]
+    fluid_density : float or symbolic
+        Fluid density [kg/m³]
+    fluid_viscosity : float or symbolic
+        Dynamic viscosity [Pa·s]
+    check_regime : bool, optional
+        If True, warn when Re > RE_LAMINAR_MAX (default: True).
+        Set to False for symbolic (Pyomo/CasADi) use.
+
+    Returns
+    -------
+    pressure_drop : float or symbolic
+        Pressure drop [Pa]
+    friction_factor : float or symbolic
+        Darcy friction factor [-]
+    """
+    Re = calculate_reynolds_number(
+        velocity, pipe_diameter, fluid_density, fluid_viscosity
+    )
+
+    if check_regime:
+        try:
+            Re_val = np.asarray(Re)
+            if np.any(Re_val > RE_LAMINAR_MAX):
+                print(f"Warning: Re > {RE_LAMINAR_MAX}, flow may not be laminar")
+        except (TypeError, ValueError):
+            pass  # Skip check for symbolic types
+
+    # Friction factor for laminar flow (Hagen-Poiseuille)
+    f = 64 / Re
+
+    # Darcy-Weisbach equation
+    pressure_drop = (
+        f * (pipe_length / pipe_diameter) * (fluid_density * velocity**2 / 2)
+    )
+
+    return pressure_drop, f
+
+
+def estimate_pressure_drop_turbulent(
+    velocity, pipe_length, pipe_diameter, fluid_density, fluid_viscosity,
+    check_regime=True
+):
+    """
+    Estimate pressure drop for turbulent flow using Darcy-Weisbach equation.
+
+    Uses Blasius correlation for smooth pipes: f = 0.316/Re^0.25.
+    Compatible with Pyomo/CasADi symbolic types when check_regime=False.
+
+    Parameters
+    ----------
+    velocity : float or symbolic
+        Fluid velocity [m/s]
+    pipe_length : float or symbolic
+        Pipe length [m]
+    pipe_diameter : float or symbolic
+        Pipe inner diameter [m]
+    fluid_density : float or symbolic
+        Fluid density [kg/m³]
+    fluid_viscosity : float or symbolic
+        Dynamic viscosity [Pa·s]
+    check_regime : bool, optional
+        If True, warn when Re < RE_TURBULENT_MIN (default: True).
+        Set to False for symbolic (Pyomo/CasADi) use.
+
+    Returns
+    -------
+    pressure_drop : float or symbolic
+        Pressure drop [Pa]
+    friction_factor : float or symbolic
+        Darcy friction factor [-]
+    """
+    Re = calculate_reynolds_number(
+        velocity, pipe_diameter, fluid_density, fluid_viscosity
+    )
+
+    if check_regime:
+        try:
+            Re_val = np.asarray(Re)
+            if np.any(Re_val < RE_TURBULENT_MIN):
+                print(f"Warning: Re < {RE_TURBULENT_MIN}, flow may not be fully turbulent")
+        except (TypeError, ValueError):
+            pass  # Skip check for symbolic types
+
+    # Friction factor for turbulent flow (Blasius correlation)
+    f = 0.316 / Re**0.25
+
+    # Darcy-Weisbach equation
+    pressure_drop = (
+        f * (pipe_length / pipe_diameter) * (fluid_density * velocity**2 / 2)
+    )
+
+    return pressure_drop, f
 
 
 def estimate_pressure_drop(
     velocity, pipe_length, pipe_diameter, fluid_density, fluid_viscosity
 ):
     """
-    Estimate pressure drop using Darcy-Weisbach equation
+    Estimate pressure drop using Darcy-Weisbach equation.
 
-    Parameters:
-    -----------
+    Automatically selects laminar or turbulent correlation based on Re.
+    Note: Not compatible with symbolic types (Pyomo/CasADi) due to conditional.
+    Use estimate_pressure_drop_laminar or estimate_pressure_drop_turbulent instead.
+
+    Parameters
+    ----------
     velocity : float
         Fluid velocity [m/s]
     pipe_length : float
@@ -234,8 +354,8 @@ def estimate_pressure_drop(
     fluid_viscosity : float
         Dynamic viscosity [Pa·s]
 
-    Returns:
-    --------
+    Returns
+    -------
     pressure_drop : float
         Pressure drop [Pa]
     friction_factor : float
@@ -246,7 +366,7 @@ def estimate_pressure_drop(
     )
 
     # Friction factor correlation
-    if Re < 2300:  # Laminar flow
+    if Re < RE_LAMINAR_MAX:  # Laminar flow
         f = 64 / Re
     else:  # Turbulent flow (Blasius correlation for smooth pipes)
         f = 0.316 / Re**0.25

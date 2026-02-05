@@ -4,6 +4,24 @@ This module implements a 1D partial differential equation (PDE) model for heat
 transfer in a solar collector pipe using Pyomo's differential-algebraic
 equation (DAE) framework. The model solves the advection-diffusion equation
 with heat input and convective losses.
+
+Functions
+---------
+create_pipe_flow_model(...) -> ConcreteModel
+    Creates Pyomo model with temperature variable T, derivative variables,
+    physical parameters, and time-varying input parameters (v, I, T_inlet).
+
+add_pde_constraints(model) -> ConcreteModel
+    Adds PDE constraint, initial conditions, and boundary conditions.
+
+solve_model(model, ...) -> Results
+    Applies finite difference discretization and solves with IPOPT.
+
+plot_results(model, ...) -> (Figure, Figure)
+    Plots time series (velocity, irradiance, temperatures) and contour plot.
+
+print_temp_profiles(model, ...)
+    Prints temperature profiles and numerical diagnostics.
 """
 
 import matplotlib.pyplot as plt

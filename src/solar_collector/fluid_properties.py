@@ -41,15 +41,22 @@ class FluidProperties:
         self.coeffs = coeffs
 
     def _check_temperature_range(self, T):
-        """Check if temperature is in valid range and warn if not"""
-        T_array = np.atleast_1d(T)
-        if np.any(T_array < self.T_min) or np.any(T_array > self.T_max):
-            T_min_C = self.T_min - 273.15
-            T_max_C = self.T_max - 273.15
-            print(
-                f"Warning: Temperature outside valid range "
-                f"({T_min_C:.0f}°C to {T_max_C:.0f}°C)"
-            )
+        """Check if temperature is in valid range and warn if not.
+
+        Silently skips check for symbolic types (Pyomo, CasADi).
+        """
+        try:
+            T_array = np.atleast_1d(T)
+            if np.any(T_array < self.T_min) or np.any(T_array > self.T_max):
+                T_min_C = self.T_min - 273.15
+                T_max_C = self.T_max - 273.15
+                print(
+                    f"Warning: Temperature outside valid range "
+                    f"({T_min_C:.0f}°C to {T_max_C:.0f}°C)"
+                )
+        except (TypeError, ValueError):
+            # Skip check for symbolic types (Pyomo Var, CasADi MX, etc.)
+            pass
 
     def density(self, T):
         """
@@ -94,23 +101,39 @@ class FluidProperties:
         k = coeffs["a"] + coeffs["b"] * T
         return k
 
-    def viscosity(self, T):
+    def viscosity(self, T, exp=np.exp):
         """
         Dynamic viscosity [Pa·s] as function of temperature [K]
 
         Correlation: μ = A * exp(B/T) + C (Andrade equation with offset)
+
+        Parameters
+        ----------
+        T : float, array, or symbolic
+            Temperature in Kelvin
+        exp : callable, optional
+            Exponential function (default: np.exp).
+            Use pyomo.environ.exp for Pyomo models.
         """
         self._check_temperature_range(T)
         coeffs = self.coeffs["viscosity"]
-        mu = coeffs["A"] * np.exp(coeffs["B"] / T) + coeffs["C"]
+        mu = coeffs["A"] * exp(coeffs["B"] / T) + coeffs["C"]
         return mu
 
-    def vapor_pressure(self, T):
+    def vapor_pressure(self, T, maximum=np.maximum):
         """
         Vapor pressure [Pa] as function of temperature [K]
 
         Correlation: log10(P_Pa) = A - B/(C + T_C) (Antoine equation)
         where T_C is temperature in Celsius
+
+        Parameters
+        ----------
+        T : float, array, or symbolic
+            Temperature in Kelvin
+        maximum : callable, optional
+            Maximum function (default: np.maximum).
+            For Pyomo, pass None to skip clamping.
         """
         self._check_temperature_range(T)
         coeffs = self.coeffs["vapor_pressure"]
@@ -121,14 +144,22 @@ class FluidProperties:
         P_Pa = 10**log_P_Pa
 
         # Handle very low temperatures where pressure is negligible
-        P_Pa = np.maximum(P_Pa, 0.01)  # Minimum 0.01 Pa
+        if maximum is not None:
+            P_Pa = maximum(P_Pa, 0.01)  # Minimum 0.01 Pa
         return P_Pa
 
-    def kinematic_viscosity(self, T):
+    def kinematic_viscosity(self, T, exp=np.exp):
         """
         Kinematic viscosity [m²/s]: ν = μ/ρ
+
+        Parameters
+        ----------
+        T : float, array, or symbolic
+            Temperature in Kelvin
+        exp : callable, optional
+            Exponential function for viscosity calculation (default: np.exp).
         """
-        return self.viscosity(T) / self.density(T)
+        return self.viscosity(T, exp=exp) / self.density(T)
 
     def thermal_diffusivity(self, T):
         """
@@ -138,12 +169,19 @@ class FluidProperties:
             self.density(T) * self.heat_capacity(T)
         )
 
-    def prandtl_number(self, T):
+    def prandtl_number(self, T, exp=np.exp):
         """
         Prandtl number [-]: Pr = μ·cp/k = ν/α
+
+        Parameters
+        ----------
+        T : float, array, or symbolic
+            Temperature in Kelvin
+        exp : callable, optional
+            Exponential function for viscosity calculation (default: np.exp).
         """
         return (
-            self.viscosity(T)
+            self.viscosity(T, exp=exp)
             * self.heat_capacity(T)
             / self.thermal_conductivity(T)
         )
@@ -159,11 +197,23 @@ class FluidProperties:
         beta = -drho_dT / rho
         return beta
 
-    def get_all_properties(self, T):
+    def get_all_properties(self, T, exp=np.exp, maximum=np.maximum):
         """
         Get all fluid properties at temperature T [K]
 
-        Returns dictionary with all primary and derived properties
+        Parameters
+        ----------
+        T : float, array, or symbolic
+            Temperature in Kelvin
+        exp : callable, optional
+            Exponential function (default: np.exp).
+        maximum : callable, optional
+            Maximum function (default: np.maximum).
+
+        Returns
+        -------
+        dict
+            Dictionary with all primary and derived properties
         """
         return {
             "temperature_K": T,
@@ -171,11 +221,11 @@ class FluidProperties:
             "density": self.density(T),
             "heat_capacity": self.heat_capacity(T),
             "thermal_conductivity": self.thermal_conductivity(T),
-            "viscosity": self.viscosity(T),
-            "vapor_pressure": self.vapor_pressure(T),
-            "kinematic_viscosity": self.kinematic_viscosity(T),
+            "viscosity": self.viscosity(T, exp=exp),
+            "vapor_pressure": self.vapor_pressure(T, maximum=maximum),
+            "kinematic_viscosity": self.kinematic_viscosity(T, exp=exp),
             "thermal_diffusivity": self.thermal_diffusivity(T),
-            "prandtl_number": self.prandtl_number(T),
+            "prandtl_number": self.prandtl_number(T, exp=exp),
             "expansion_coefficient": self.expansion_coefficient(T),
         }
 

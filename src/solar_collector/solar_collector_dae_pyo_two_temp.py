@@ -5,6 +5,26 @@ This module implements a 1D partial differential equation (PDE) model for heat
 transfer in a solar collector pipe using Pyomo's differential-algebraic
 equation (DAE) framework. The model includes separate temperatures for the
 fluid (T_f) and pipe wall (T_p) with heat transfer between them and to ambient.
+
+Functions
+---------
+create_pipe_flow_model(...) -> ConcreteModel
+    Creates Pyomo model with fluid (T_f) and pipe wall (T_p) temperature
+    variables, derivative variables, physical parameters, and time-varying
+    input parameters (v, I, T_inlet). Optionally uses Dittus-Boelter for h_int.
+
+add_pde_constraints(model) -> ConcreteModel
+    Adds coupled PDE constraints for fluid and wall, initial conditions,
+    and boundary conditions.
+
+solve_model(model, ...) -> Results
+    Applies finite difference discretization and solves with IPOPT.
+
+plot_results(model, ...) -> (Figure, Figure, Figure)
+    Plots time series and contour plots for both fluid and wall temperatures.
+
+print_temp_profiles(model, ...)
+    Prints temperature profiles and heat transfer analysis.
 """
 
 import matplotlib.pyplot as plt
@@ -15,16 +35,21 @@ from pyomo.dae import ContinuousSet, DerivativeVar
 from pyomo.environ import (
     ConcreteModel,
     Constraint,
+    Expression,
     Objective,
     Param,
     SolverFactory,
     TransformationFactory,
     Var,
+    exp as pyo_exp,
 )
 
 from solar_collector.config import PLOT_COLORS, VAR_INFO
+from solar_collector.fluid_properties import SYLTHERM800
 from solar_collector.heat_transfer import (
     calculate_heat_transfer_coefficient_turbulent,
+    calculate_prandtl_number,
+    calculate_reynolds_number,
 )
 
 # Constants
@@ -50,6 +75,7 @@ OPTICAL_EFFICIENCY = 0.8  # Efficiency factor for mirror/alignment losses
 
 
 def create_pipe_flow_model(
+    fluid_props,
     L=COLLECTOR_LENGTH,
     t_final=5.0,
     n_x=50,
@@ -57,11 +83,8 @@ def create_pipe_flow_model(
     velocity_func=None,
     irradiance_func=None,
     inlet_func=None,
+    T_ref=ZERO_C + 300.0,
     thermal_diffusivity=THERMAL_DIFFUSIVITY,
-    fluid_density=FLUID_DENSITY,
-    fluid_dynamic_viscosity=FLUID_DYNAMIC_VISCOSITY,
-    fluid_thermal_conductivity=FLUID_THERMAL_CONDUCTIVITY,
-    fluid_specific_heat=FLUID_SPECIFIC_HEAT,
     T_ambient=ZERO_C + 20.0,
     pipe_diameter=PIPE_DIAMETER,
     pipe_wall_thickness=PIPE_WALL_THICKNESS,
@@ -69,15 +92,23 @@ def create_pipe_flow_model(
     pipe_thermal_conductivity=PIPE_THERMAL_CONDUCTIVITY,
     pipe_density=PIPE_DENSITY,
     pipe_specific_heat=PIPE_SPECIFIC_HEAT,
-    use_dittus_boelter=True,
     concentration_factor=CONCENTRATION_FACTOR,
     optical_efficiency=OPTICAL_EFFICIENCY,
+    constant_density=True,
+    constant_viscosity=True,
+    constant_thermal_conductivity=True,
+    constant_specific_heat=True,
+    constant_heat_transfer_coeff=True,
 ):
     """
-    Create Pyomo model for pipe flow heat transport PDE with fluid and wall
+    Create Pyomo model for pipe flow heat transport PDE with fluid and wall.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
+    fluid_props : FluidProperties
+        Fluid properties object (e.g., SYLTHERM800()) providing temperature-
+        dependent correlations for density, viscosity, thermal conductivity,
+        and specific heat.
     L : float, default=100.0
         Length of solar collector section of pipe [m] (domain with heat input)
     t_final : float, default=5.0
@@ -87,59 +118,78 @@ def create_pipe_flow_model(
     n_t : int, default=50
         Number of temporal discretization points
     velocity_func : callable, optional
-        Function for time-varying fluid velocity v(t) [m/s]
-        If None, uses default constant velocity
+        Function for time-varying fluid velocity v(t) [m/s].
+        If None, uses default constant velocity.
     irradiance_func : callable, optional
         Function for time-varying solar irradiance I(t) [W/m²]
-        (natural/direct normal irradiance before concentration)
-        If None, uses default zero irradiance
+        (natural/direct normal irradiance before concentration).
+        If None, uses default zero irradiance.
     inlet_func : callable, optional
-        Function for time-varying inlet temperature T_inlet(t) [K]
-        If None, uses default constant inlet temperature
+        Function for time-varying inlet temperature T_inlet(t) [K].
+        If None, uses default constant inlet temperature.
+    T_ref : float, default=ZERO_C + 300.0
+        Reference temperature [K] for evaluating constant properties.
     thermal_diffusivity : float, default=THERMAL_DIFFUSIVITY
-        Fluid thermal diffusivity α [m²/s]
-    fluid_density : float, default=FLUID_DENSITY
-        Fluid density ρ_f [kg/m³]
-    fluid_dynamic_viscosity : float
-    fluid_thermal_conductivity : float
-    fluid_specific_heat : float, default=FLUID_SPECIFIC_HEAT
-        Fluid specific heat capacity cp_f [J/kg·K]
+        Fluid thermal diffusivity α [m²/s].
     T_ambient : float, default=ZERO_C + 20.0
-        Ambient temperature [K] for convective heat loss
+        Ambient temperature [K] for convective heat loss.
     pipe_diameter : float, default=0.07
-        Inner pipe diameter D [m]
-    pipe_wall_thickness : float, default=0.002
-        Pipe wall thickness d [m]
-    heat_transfer_coeff_int : float, default=200.0
-        Internal heat transfer coefficient h_int [W/m²·K] (pipe-to-fluid)
+        Inner pipe diameter D [m].
+    pipe_wall_thickness : float, default=0.006
+        Pipe wall thickness d [m].
     heat_transfer_coeff_ext : float, default=20.0
-        External heat transfer coefficient h_ext [W/m²·K] (pipe-to-ambient)
+        External heat transfer coefficient h_ext [W/m²·K] (pipe-to-ambient).
     pipe_thermal_conductivity : float, default=50.0
-        Pipe wall thermal conductivity k_p [W/m·K]
+        Pipe wall thermal conductivity k_p [W/m·K].
     pipe_density : float, default=7850.0
-        Pipe wall density ρ_p [kg/m³]
+        Pipe wall density ρ_p [kg/m³].
     pipe_specific_heat : float, default=450.0
-        Pipe wall specific heat capacity cp_p [J/kg·K]
+        Pipe wall specific heat capacity cp_p [J/kg·K].
     concentration_factor : float, default=26.0
-        Solar concentration ratio c (mirror width / effective absorber width)
+        Solar concentration ratio c (mirror width / effective absorber width).
     optical_efficiency : float, default=0.8
-        Optical efficiency ε accounting for mirror/alignment losses
+        Optical efficiency ε accounting for mirror/alignment losses.
+    constant_density : bool, default=True
+        If True, use constant density evaluated at T_ref.
+        If False, use temperature-dependent Expression.
+    constant_viscosity : bool, default=True
+        If True, use constant viscosity evaluated at T_ref.
+        If False, use temperature-dependent Expression.
+    constant_thermal_conductivity : bool, default=True
+        If True, use constant thermal conductivity evaluated at T_ref.
+        If False, use temperature-dependent Expression.
+    constant_specific_heat : bool, default=True
+        If True, use constant specific heat evaluated at T_ref.
+        If False, use temperature-dependent Expression.
+    constant_heat_transfer_coeff : bool, default=True
+        If True, use constant h_int evaluated at T_ref using Dittus-Boelter.
+        If False, use temperature-dependent h_int Expression based on local
+        fluid properties at T_f[t, x] using Dittus-Boelter correlation.
 
-    Returns:
-    --------
+    Returns
+    -------
     model : pyomo.ConcreteModel
         Pyomo model with variables, parameters, and derivative variables
         defined.
 
-    Notes:
-    ------
+    Notes
+    -----
     - Creates extended domain: 0 to L_extended = L * 1.1
     - Solar collector section: 0 < x <= L (with heat input to wall)
     - Buffer extension: L < x <= L_extended (no heat input)
     - Two temperature variables: T_f (fluid) and T_p (pipe wall)
+    - Fluid properties can be constant or temperature-dependent Expressions
     """
 
     model = ConcreteModel()
+
+    # Store fluid properties object and settings on model
+    model.fluid_props = fluid_props
+    model.T_ref = T_ref
+    model.constant_density = constant_density
+    model.constant_viscosity = constant_viscosity
+    model.constant_thermal_conductivity = constant_thermal_conductivity
+    model.constant_specific_heat = constant_specific_heat
 
     # Extend domain by 10% beyond nominal length
     L_extended = L * 1.1
@@ -164,12 +214,58 @@ def create_pipe_flow_model(
     model.dT_p_dx = DerivativeVar(model.T_p, wrt=model.x)
     model.d2T_p_dx2 = DerivativeVar(model.T_p, wrt=(model.x, model.x))
 
-    # Fluid properties
+    # Fluid thermal diffusivity (always constant for now)
     model.alpha_f = Param(initialize=thermal_diffusivity)  # [m²/s]
-    model.rho_f = Param(initialize=fluid_density)  # [kg/m³]
-    model.eta_f = Param(initialize=fluid_dynamic_viscosity)  # [Pa·s]
-    model.lam_f = Param(initialize=fluid_thermal_conductivity)  # [W/m·K]
-    model.cp_f = Param(initialize=fluid_specific_heat)  # [J/kg·K]
+
+    # Fluid density: constant or temperature-dependent
+    if constant_density:
+        model._rho_f_const = Param(initialize=fluid_props.density(T_ref))
+
+        @model.Expression(model.t, model.x)
+        def rho_f(m, t, x):
+            return m._rho_f_const
+    else:
+        @model.Expression(model.t, model.x)
+        def rho_f(m, t, x):
+            return m.fluid_props.density(m.T_f[t, x])
+
+    # Fluid dynamic viscosity: constant or temperature-dependent
+    if constant_viscosity:
+        model._eta_f_const = Param(initialize=fluid_props.viscosity(T_ref))
+
+        @model.Expression(model.t, model.x)
+        def eta_f(m, t, x):
+            return m._eta_f_const
+    else:
+        @model.Expression(model.t, model.x)
+        def eta_f(m, t, x):
+            return m.fluid_props.viscosity(m.T_f[t, x], exp=pyo_exp)
+
+    # Fluid thermal conductivity: constant or temperature-dependent
+    if constant_thermal_conductivity:
+        model._lam_f_const = Param(
+            initialize=fluid_props.thermal_conductivity(T_ref)
+        )
+
+        @model.Expression(model.t, model.x)
+        def lam_f(m, t, x):
+            return m._lam_f_const
+    else:
+        @model.Expression(model.t, model.x)
+        def lam_f(m, t, x):
+            return m.fluid_props.thermal_conductivity(m.T_f[t, x])
+
+    # Fluid specific heat: constant or temperature-dependent
+    if constant_specific_heat:
+        model._cp_f_const = Param(initialize=fluid_props.heat_capacity(T_ref))
+
+        @model.Expression(model.t, model.x)
+        def cp_f(m, t, x):
+            return m._cp_f_const
+    else:
+        @model.Expression(model.t, model.x)
+        def cp_f(m, t, x):
+            return m.fluid_props.heat_capacity(m.T_f[t, x])
 
     # Pipe properties
     model.rho_p = Param(initialize=pipe_density)  # [kg/m³]
@@ -211,39 +307,71 @@ def create_pipe_flow_model(
     model.c = Param(initialize=concentration_factor)  # Concentration ratio
     model.epsilon = Param(initialize=optical_efficiency)  # Optical efficiency
 
-    # Calculate initial heat transfer coefficient if using Dittus-Boelter
-    if use_dittus_boelter:
-        # Use initial velocity to calculate h_int
-        v_initial = velocity_func(0.0)
-        h_int_initial, Re_initial, Pr_initial, Nu_initial = (
-            calculate_heat_transfer_coefficient_turbulent(
-                v_initial,
-                model.D,
-                model.rho_f,
-                model.eta_f,
-                model.lam_f,
-                model.cp_f,
-            )
-        )
-        print("Using Dittus-Boelter correlation for h_int:")
-        print(f"  Initial velocity: {v_initial:.3f} m/s")
-        print(f"  Reynolds number: {Re_initial:.0f}")
-        print(f"  Prandtl number: {Pr_initial:.1f}")
-        print(f"  Nusselt number: {Nu_initial:.1f}")
-        print(f"  Heat transfer coefficient: {h_int_initial:.1f} W/m²·K")
-        heat_transfer_coeff_int = h_int_initial
-    else:
-        # Use constant value
-        heat_transfer_coeff_int = HEAT_TRANSFER_COEFF_INT
-        print(f"Using constant h_int: {heat_transfer_coeff_int:.1f} W/m²·K")
-
-    # Add h_int parameter to model
-    model.h_int = Param(
-        initialize=heat_transfer_coeff_int, mutable=True
-    )  # [W/m²·K]
-
     # Store heat transfer coefficient settings
-    model.use_dittus_boelter = use_dittus_boelter
+    model.constant_heat_transfer_coeff = constant_heat_transfer_coeff
+
+    # Calculate h_int using Dittus-Boelter correlation
+    # Get fluid properties at reference temperature for initial calculation
+    rho_ref = fluid_props.density(T_ref)
+    eta_ref = fluid_props.viscosity(T_ref)
+    lam_ref = fluid_props.thermal_conductivity(T_ref)
+    cp_ref = fluid_props.heat_capacity(T_ref)
+
+    # Calculate h_int at T_ref for printing and constant case
+    v_initial = velocity_func(0.0)
+    h_int_ref, Re_ref, Pr_ref, Nu_ref = (
+        calculate_heat_transfer_coefficient_turbulent(
+            v_initial,
+            pipe_diameter,
+            rho_ref,
+            eta_ref,
+            lam_ref,
+            cp_ref,
+        )
+    )
+
+    if constant_heat_transfer_coeff:
+        print("Using constant h_int (Dittus-Boelter at T_ref):")
+    else:
+        print("Using temperature-dependent h_int (Dittus-Boelter):")
+    print(f"  Reference temperature: {T_ref - ZERO_C:.0f}°C")
+    print(f"  Initial velocity: {v_initial:.3f} m/s")
+    print(f"  Reynolds number at T_ref: {Re_ref:.0f}")
+    print(f"  Prandtl number at T_ref: {Pr_ref:.1f}")
+    print(f"  Nusselt number at T_ref: {Nu_ref:.1f}")
+    print(f"  Heat transfer coefficient at T_ref: {h_int_ref:.1f} W/m²·K")
+
+    # Internal heat transfer coefficient: constant or temperature-dependent
+    if constant_heat_transfer_coeff:
+        model._h_int_const = Param(initialize=h_int_ref)
+
+        @model.Expression(model.t, model.x)
+        def h_int(m, t, x):
+            return m._h_int_const
+    else:
+        # Temperature-dependent h_int using Dittus-Boelter correlation:
+        # Re = rho * v * D / mu
+        # Pr = mu * cp / k
+        # Nu = 0.023 * Re^0.8 * Pr^0.4
+        # h = Nu * k / D
+        @model.Expression(model.t, model.x)
+        def h_int(m, t, x):
+            # Get local fluid properties (may be constant or T-dependent)
+            rho = m.rho_f[t, x]
+            eta = m.eta_f[t, x]
+            lam = m.lam_f[t, x]
+            cp = m.cp_f[t, x]
+            v = m.v[t]
+            D = m.D
+
+            # Reynolds number
+            Re = rho * v * D / eta
+            # Prandtl number
+            Pr = eta * cp / lam
+            # Nusselt number (Dittus-Boelter)
+            Nu = 0.023 * Re**0.8 * Pr**0.4
+            # Heat transfer coefficient
+            return Nu * lam / D
 
     # Time-varying parameters (will be initialized after discretization)
     model.v = Param(model.t, mutable=True)
@@ -275,11 +403,11 @@ def add_pde_constraints(model):
         #   h_int * π * D * (T_p - T_f) / (π * D² / 4)
         # Simplified:
         #   h_int * 4 * (T_p - T_f) / D [W/m³]
-        heat_to_fluid = m.h_int * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+        heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
 
         # Fluid PDE: (energy balance)
         #   ρcp ∂T_f/∂t + ρcp v(t)∂T_f/∂x = ρcp α_f∂²T_f/∂x² + q_to_fluid
-        rho_cp = m.rho_f * m.cp_f
+        rho_cp = m.rho_f[t, x] * m.cp_f[t, x]
         return (
             rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t] * m.dT_f_dx[t, x]
             == rho_cp * m.alpha_f * m.d2T_f_dx2[t, x] + heat_to_fluid
@@ -319,7 +447,7 @@ def add_pde_constraints(model):
             )
 
             # Heat transfer to fluid per unit volume [W/m³]
-            heat_to_fluid = m.h_int * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+            heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
 
             # Heat loss to ambient per unit volume [W/m³]
             # Heat loss per unit length:
@@ -350,7 +478,7 @@ def add_pde_constraints(model):
 
         else:
             # For extended section (L < x <= L_extended): no heat input
-            heat_to_fluid = m.h_int * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+            heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
             D_outer = m.D + 2 * m.d
             heat_loss_volumetric = (
                 m.h_ext
@@ -470,21 +598,9 @@ def solve_model(
         model.I[t].set_value(model.irradiance_func(t))
         model.T_inlet[t].set_value(model.inlet_func(t))
 
-        # Update heat transfer coefficient if using Dittus-Boelter correlation
-        if model.use_dittus_boelter:
-            h_int_t, _, _, _ = calculate_heat_transfer_coefficient_turbulent(
-                velocity_t,
-                model.D,
-                model.rho_f,
-                model.eta_f,
-                model.lam_f,
-                model.cp_f,
-            )
-            # Update the parameter value for this time step
-            # Note: Since h_int is not time-varying in this model structure,
-            # we use the average velocity for the overall simulation
-            if t == list(model.t)[0]:  # First time point
-                model.h_int.set_value(h_int_t)
+        # Note: h_int was already calculated in create_pipe_flow_model using
+        # Dittus-Boelter correlation if use_dittus_boelter=True. For now, h_int
+        # is spatially uniform and constant in time (evaluated at T_ref).
 
     # Provide good initial guess for temperature fields
     for t in model.t:
@@ -790,9 +906,10 @@ def print_temp_profiles(model, t_eval, x_eval):
     max_diff = max(all_temp_diffs)
 
     print(f"Fluid temperature range: {min_temp_f:.1f} K to {max_temp_f:.1f} K")
+    max_temp_p = max(all_temps_p)
     print(
         f"Pipe wall temperature range: {min_temp_p:.1f} K to "
-        f"{{max_temp_p:.1f}} K"
+        f"{max_temp_p:.1f} K"
     )
     print(
         f"Temperature difference range: {min_diff:.1f} K to {max_diff:.1f} K"
@@ -870,7 +987,8 @@ def print_temp_profiles(model, t_eval, x_eval):
         )
 
         # Estimate heat transfer rate per unit length
-        h_int_val = pyo.environ.value(model.h_int)
+        # h_int is an indexed Expression; use the underlying constant value
+        h_int_val = pyo.environ.value(model._h_int_const)
         D_val = pyo.environ.value(model.D)
         heat_transfer_rate = h_int_val * np.pi * D_val * avg_temp_diff  # W/m
         print(
