@@ -1,0 +1,341 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{siunitx}
+
+\title{Parabolic Trough Solar Collector Flow Simulation Model}
+\author{William Tubbs}
+\date{February 2026}
+
+\begin{document}
+
+\maketitle
+
+\section{Fluid Properties} \label{sec:fluid_properties}
+
+The heat transfer fluid is SYLTHERM™ 800, a product manufactured by the Dow chemical company [ref]. This is a thermal oil specially formulated for high-temperature liquid phase heat transfer applications. According to Dow, it is a stable, long-lasting silicone polymer with a recommended operating temperature range of -40 to 400°C.
+
+Since the properties of SYLTHERM™ 800 vary with temperature, we developed formulas to simulate the variations of the properties of interest by fitting simple models to data published by the manufacturer. The models were fitted to a subset of the manufacturer's data for temperatures between 200 and 400°C.
+
+The density of the fluid, $\rho_f$, as a function of its temperature, $T_f$, in \si{\kelvin} was simulated using the quadratic model in \eqref{eq:rhof}.
+\begin{equation}
+\rho_f = 960.73 + 0.11489 \cdot T_f - 1.082 \times 10^{-3} \cdot T_f^2 \quad [\text{kg}/\text{m}^3] \label{eq:rhof}
+\end{equation}
+Figure~\ref{fig:density} shows how well the model compares to the manufacturer's data.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{images/SYLTHERM_800_density_comparison.png}
+\caption{Density model comparison with manufacturer data.}
+\label{fig:density}
+\end{figure}
+
+The specific heat capacity of the fluid, $c_{p,f}$, as a function of its temperature was simulated using the linear model in \eqref{eq:cpf}.
+\begin{equation}
+c_{p,f} = 1108.027 + 1.70714 \cdot T_f \quad \left[\si{\joule\per\kilogram\per\kelvin}\right]
+\label{eq:cpf}
+\end{equation}
+Figure~\ref{fig:heat_capacity} shows how well the model compares to the manufacturer's data.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{images/SYLTHERM_800_heat_capacity_comparison.png}
+\caption{Heat capacity model comparison with manufacturer data.}
+\label{fig:heat_capacity}
+\end{figure}
+
+The thermal conductivity of the fluid, $k_f$, as a function of its temperature was simulated using the linear model in \eqref{eq:kf}.
+\begin{equation}
+k_f = 0.19091 - 1.894 \times 10^{-4} \cdot T_f \quad [\text{W}/(\text{m}\cdot\text{K})] \label{eq:kf}
+\end{equation}
+Figure~\ref{fig:thermal_conductivity} shows how well the model compares to the manufacturer's data.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{images/SYLTHERM_800_thermal_conductivity_comparison.png}
+\caption{Thermal conductivity model comparison with manufacturer data.}
+\label{fig:thermal_conductivity}
+\end{figure}
+
+The dynamic viscosity of the fluid, $\mu_f$, as a function of its temperature was simulated using the Andrade equation with offset in \eqref{eq:muf}.
+\begin{equation}
+\mu_f = 3.941 \times 10^{-5} \cdot \exp\left(\frac{1637.0}{T_f}\right) - 2.115 \times 10^{-4} \quad [\text{Pa}\cdot\text{s}] \label{eq:muf}
+\end{equation}
+Figure~\ref{fig:viscosity} shows how well the model compares to the manufacturer's data.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{images/SYLTHERM_800_viscosity_comparison.png}
+\caption{Viscosity model comparison with manufacturer data.}
+\label{fig:viscosity}
+\end{figure}
+
+The vapor pressure of the fluid, $P_f$, as a function of its temperature was simulated using the Antoine equation in \eqref{eq:Pf}, where $T_C = T_f - 273.15$ is the temperature in \si{\degreeCelsius}.
+\begin{equation}
+\log_{10}(P_f) = 7.9938 - \frac{964.133}{119.431 + T_C} \quad [\text{Pa}] \label{eq:Pf}
+\end{equation}
+Figure~\ref{fig:vapor_pressure} shows how well the model compares to the manufacturer's data.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{images/SYLTHERM_800_vapor_pressure_comparison.png}
+\caption{Vapor pressure model comparison with manufacturer data.}
+\label{fig:vapor_pressure}
+\end{figure}
+
+\section{Heat Transfer} \label{sec:heat_transfer}
+
+The convective heat transfer coefficient for the oil flowing inside the absorber pipe was calculated using the Dittus-Boelter correlation, an empirical relationship for turbulent flow in smooth pipes. This correlation relates the Nusselt number to the Reynolds and Prandtl numbers and is valid for fully developed turbulent flow with moderate temperature differences.
+
+The Dittus-Boelter correlation is given by \eqref{eq:dittus-boelter}.
+\begin{equation}
+\text{Nu} = 0.023 \cdot \text{Re}^{0.8} \cdot \text{Pr}^{0.4} \label{eq:dittus-boelter}
+\end{equation}
+where $\text{Nu} = h D / k_f$ is the Nusselt number, $\text{Re} = \rho_f v D / \mu_f$ is the Reynolds number, and $\text{Pr} = \mu_f c_{p,f} / k_f$ is the Prandtl number. Here, $h$ is the convective heat transfer coefficient [\si{\watt\per\square\meter\per\kelvin}], $D$ is the inner diameter of the absorber tube [\si{\meter}], and $v$ is the fluid velocity [\si{\meter\per\second}].
+
+The heat transfer coefficient is then obtained from the Nusselt number as shown in \eqref{eq:htc}.
+\begin{equation}
+h = \frac{\text{Nu} \cdot k_f}{D} \label{eq:htc}
+\end{equation}
+
+Consequently, the heat transfer rate depends on the fluid properties and flow velocity, as well as the temperature difference. This correlation is valid for $\text{Re} > 10{,}000$ and $0.7 \leq \text{Pr} \leq 160$, with an accuracy of approximately $\pm 25\%$ for most engineering applications.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{images/reynolds_number_vs_velocity.png}
+\caption{Reynold's number for absorber pipe flow.}
+\label{fig:re_vs_v}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{images/heat_transfer_coeff_vs_velocity.png}
+\caption{Heat transfer coefficient between pipe wall and fluid.}
+\label{fig:h_vs_v_and_Tf}
+\end{figure}
+
+\section{Flow Model} \label{sec:flow_model}
+
+This section describes the mathematical model used to simulate the thermal dynamics of the solar collector. The model is based on a one-dimensional partial differential equation (PDE) formulation that tracks both the fluid temperature and the absorber pipe wall temperature along the length of the collector.
+
+\subsection{Model Overview}
+
+The two-temperature model considers separate energy balances for the heat transfer fluid flowing inside the absorber pipe and for the pipe wall itself. This approach captures the thermal lag between the pipe wall (which receives the concentrated solar heat) and the fluid (which must be heated by convection from the wall). The model domain consists of two regions:
+\begin{itemize}
+    \item \textbf{Solar collector section} ($0 < x \leq L$): The absorber pipe receives concentrated solar radiation on its outer surface.
+    \item \textbf{Insulated extension} ($L < x \leq L_{\text{ext}}$): A short buffer section beyond the collector with no heat input, used to avoid numerical boundary effects.
+\end{itemize}
+
+\subsection{Nomenclature}
+
+Table~\ref{tab:nomenclature} summarizes the symbols used in the model equations.
+
+\begin{table}[htbp]
+\centering
+\caption{Nomenclature for the flow model.}
+\label{tab:nomenclature}
+\begin{tabular}{lll}
+\hline
+Symbol & Description & Units \\
+\hline
+\multicolumn{3}{l}{\textit{State variables and coordinates}} \\
+$T_f$ & Fluid temperature & \si{\kelvin} \\
+$T_p$ & Pipe wall temperature & \si{\kelvin} \\
+$x$ & Position along pipe & \si{\meter} \\
+$t$ & Time & \si{\second} \\
+\hline
+\multicolumn{3}{l}{\textit{Input variables}} \\
+$\dot{m}$ & Mass flow rate & \si{\kilogram\per\second} \\
+$I$ & Natural solar irradiance (DNI) & \si{\watt\per\square\meter} \\
+$T_{\text{inlet}}$ & Inlet fluid temperature & \si{\kelvin} \\
+\hline
+\multicolumn{3}{l}{\textit{Derived quantities}} \\
+$v$ & Fluid velocity & \si{\meter\per\second} \\
+$q_{\text{eff}}$ & Effective concentrated solar heat flux & \si{\watt\per\square\meter} \\
+\hline
+\multicolumn{3}{l}{\textit{Fluid properties (may be temperature-dependent)}} \\
+$\rho_f$ & Fluid density & \si{\kilogram\per\cubic\meter} \\
+$c_{p,f}$ & Fluid specific heat capacity & \si{\joule\per\kilogram\per\kelvin} \\
+$k_f$ & Fluid thermal conductivity & \si{\watt\per\meter\per\kelvin} \\
+$\mu_f$ & Fluid dynamic viscosity & \si{\pascal\second} \\
+$\alpha_f$ & Fluid thermal diffusivity & \si{\square\meter\per\second} \\
+$h_{\text{int}}$ & Internal heat transfer coefficient & \si{\watt\per\square\meter\per\kelvin} \\
+\hline
+\multicolumn{3}{l}{\textit{Pipe properties (constant)}} \\
+$\rho_p$ & Pipe wall density & \si{\kilogram\per\cubic\meter} \\
+$c_{p,p}$ & Pipe wall specific heat capacity & \si{\joule\per\kilogram\per\kelvin} \\
+$k_p$ & Pipe wall thermal conductivity & \si{\watt\per\meter\per\kelvin} \\
+$\alpha_p$ & Pipe wall thermal diffusivity & \si{\square\meter\per\second} \\
+$h_{\text{ext}}$ & External heat transfer coefficient & \si{\watt\per\square\meter\per\kelvin} \\
+\hline
+\multicolumn{3}{l}{\textit{Geometric parameters}} \\
+$D$ & Pipe inner diameter & \si{\meter} \\
+$d$ & Pipe wall thickness & \si{\meter} \\
+$D_o$ & Pipe outer diameter ($D + 2d$) & \si{\meter} \\
+$A$ & Pipe cross-sectional area ($\pi D^2/4$) & \si{\square\meter} \\
+$L$ & Collector length & \si{\meter} \\
+\hline
+\multicolumn{3}{l}{\textit{Solar collector parameters}} \\
+$c$ & Solar concentration factor & -- \\
+$\epsilon$ & Optical efficiency & -- \\
+$T_{\text{amb}}$ & Ambient temperature & \si{\kelvin} \\
+\hline
+\multicolumn{3}{l}{\textit{Reference values}} \\
+$T_{\text{ref}}$ & Reference temperature for constant properties & \si{\kelvin} \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Governing Equations}
+
+\subsubsection{Mass Flow Rate and Velocity}
+
+The model uses mass flow rate $\dot{m}(t)$ as the primary flow input rather than velocity, since mass flow rate is conserved along the pipe length. The local fluid velocity is computed from mass conservation:
+\begin{equation}
+v(t,x) = \frac{\dot{m}(t)}{\rho_f(t,x) \cdot A}
+\label{eq:velocity}
+\end{equation}
+where $A = \pi D^2/4$ is the pipe cross-sectional area. When density is constant, velocity is uniform along the pipe. When density varies with temperature, velocity increases in regions of lower density (higher temperature) to conserve mass.
+
+\subsubsection{Fluid Energy Balance}
+
+The fluid temperature $T_f(x,t)$ is governed by the advection-diffusion equation with a source term representing heat transfer from the pipe wall:
+\begin{equation}
+\rho_f c_{p,f} \frac{\partial T_f}{\partial t} + \rho_f c_{p,f} v \frac{\partial T_f}{\partial x} = \rho_f c_{p,f} \alpha_f \frac{\partial^2 T_f}{\partial x^2} + \dot{q}_{\text{wall}\rightarrow\text{fluid}}
+\label{eq:fluid_pde}
+\end{equation}
+where the heat transfer rate from the pipe wall to the fluid per unit volume is:
+\begin{equation}
+\dot{q}_{\text{wall}\rightarrow\text{fluid}} = \frac{4 h_{\text{int}}}{D} \left( T_p - T_f \right) \quad \left[\si{\watt\per\cubic\meter}\right]
+\label{eq:q_wall_to_fluid}
+\end{equation}
+This expression is derived by considering the heat transfer through the inner pipe surface (area $\pi D$ per unit length) distributed over the fluid volume (cross-sectional area $\pi D^2/4$).
+
+Note that in \eqref{eq:fluid_pde}, the fluid properties $\rho_f$, $c_{p,f}$, $\alpha_f$, and the heat transfer coefficient $h_{\text{int}}$ may be either constant or functions of the local fluid temperature $T_f(t,x)$. The temperature-dependent correlations for fluid properties are given in Section~\ref{sec:fluid_properties}, and the heat transfer coefficient calculation is described in Section~\ref{sec:heat_transfer}.
+
+\subsubsection{Pipe Wall Energy Balance}
+
+The pipe wall temperature $T_p(x,t)$ is governed by the heat conduction equation with source and sink terms. In the solar collector section ($0 < x \leq L$), the pipe wall receives concentrated solar radiation:
+\begin{equation}
+\rho_p c_{p,p} \frac{\partial T_p}{\partial t} = \rho_p c_{p,p} \alpha_p \frac{\partial^2 T_p}{\partial x^2} + \dot{q}_{\text{solar}} - \dot{q}_{\text{wall}\rightarrow\text{fluid}} - \dot{q}_{\text{wall}\rightarrow\text{amb}}
+\label{eq:wall_pde_collector}
+\end{equation}
+
+The volumetric solar heat input rate is:
+\begin{equation}
+\dot{q}_{\text{solar}} = \frac{4 D_o}{D_o^2 - D^2} q_{\text{eff}}(t) \quad \left[\si{\watt\per\cubic\meter}\right]
+\label{eq:q_solar}
+\end{equation}
+where $q_{\text{eff}}(t)$ is the effective concentrated solar heat flux [\si{\watt\per\square\meter}] applied to the outer surface of the pipe, and the geometric factor converts from surface flux to volumetric rate.
+
+The effective solar heat flux is calculated using:
+\begin{equation}
+q_{\text{eff}}(t) = \frac{I(t) \cdot c \cdot \epsilon}{2}
+\label{eq:q_eff}
+\end{equation}
+where:
+\begin{itemize}
+    \item $I(t)$ is the natural (direct normal) solar irradiance [\si{\watt\per\square\meter}],
+    \item $c$ is the solar concentration factor (ratio of mirror aperture width to effective absorber width),
+    \item $\epsilon$ is the optical efficiency accounting for mirror reflectivity and alignment losses,
+    \item The factor of 2 in the denominator accounts for the parabolic mirrors directing sunlight onto only 180° of the pipe outer surface.
+\end{itemize}
+
+The heat loss from the pipe wall to the ambient per unit volume is:
+\begin{equation}
+\dot{q}_{\text{wall}\rightarrow\text{amb}} = \frac{4 D_o h_{\text{ext}}}{D_o^2 - D^2} \left( T_p - T_{\text{amb}} \right) \quad \left[\si{\watt\per\cubic\meter}\right]
+\label{eq:q_to_ambient}
+\end{equation}
+
+In the insulated extension section ($L < x \leq L_{\text{ext}}$), there is no solar heat input:
+\begin{equation}
+\rho_p c_{p,p} \frac{\partial T_p}{\partial t} = \rho_p c_{p,p} \alpha_p \frac{\partial^2 T_p}{\partial x^2} - \dot{q}_{\text{wall}\rightarrow\text{fluid}} - \dot{q}_{\text{wall}\rightarrow\text{amb}}
+\label{eq:wall_pde_extension}
+\end{equation}
+
+\subsection{Fluid Properties and Heat Transfer Coefficient}
+
+The model supports both constant and temperature-dependent fluid properties. Each property can be independently configured as either:
+\begin{itemize}
+    \item \textbf{Constant}: Evaluated once at a reference temperature $T_{\text{ref}}$ and used throughout the simulation.
+    \item \textbf{Temperature-dependent}: Evaluated at the local fluid temperature $T_f(t,x)$ using the empirical correlations described in Section~\ref{sec:fluid_properties}.
+\end{itemize}
+
+The fluid properties that may be temperature-dependent are density ($\rho_f$), dynamic viscosity ($\mu_f$), thermal conductivity ($k_f$), and specific heat capacity ($c_{p,f}$).
+
+\subsubsection{Internal Heat Transfer Coefficient}
+
+The internal heat transfer coefficient $h_{\text{int}}$ characterizes the convective heat transfer between the pipe wall and the flowing fluid. It is calculated using the Dittus-Boelter correlation \eqref{eq:dittus-boelter} described in Section~\ref{sec:heat_transfer}, with the heat transfer coefficient obtained from \eqref{eq:htc}.
+
+Like the fluid properties, $h_{\text{int}}$ can be either:
+\begin{itemize}
+    \item \textbf{Constant}: Calculated once using properties at $T_{\text{ref}}$ and the initial velocity.
+    \item \textbf{Temperature-dependent}: Calculated at each point $(t,x)$ using local fluid properties and velocity, giving $h_{\text{int}}(t,x)$.
+\end{itemize}
+
+\subsection{Boundary and Initial Conditions}
+
+\subsubsection{Boundary Conditions}
+
+At the inlet ($x = 0$), the fluid temperature is specified:
+\begin{equation}
+T_f(t, 0) = T_{\text{inlet}}(t)
+\label{eq:bc_inlet}
+\end{equation}
+
+At the outlet ($x = L_{\text{ext}}$), zero-gradient (Neumann) boundary conditions are applied to both temperatures:
+\begin{equation}
+\left. \frac{\partial T_f}{\partial x} \right|_{x=L_{\text{ext}}} = 0, \qquad \left. \frac{\partial T_p}{\partial x} \right|_{x=L_{\text{ext}}} = 0
+\label{eq:bc_outlet}
+\end{equation}
+
+\subsubsection{Initial Conditions}
+
+At $t = 0$, the fluid and pipe wall temperatures are initialized to uniform values:
+\begin{equation}
+T_f(0, x) = T_{f,0}, \qquad T_p(0, x) = T_{p,0}
+\label{eq:ic}
+\end{equation}
+
+\subsection{Numerical Solution}
+
+The coupled PDEs are solved using the method of lines with finite difference discretization. The spatial domain is discretized using central differences (second-order accuracy), while the temporal domain uses backward Euler (implicit) discretization for numerical stability. The resulting system of differential-algebraic equations (DAEs) is solved using the IPOPT nonlinear optimization solver within the Pyomo framework.
+
+The default model parameters used in the simulations are summarized in Table~\ref{tab:model_parameters}.
+
+\begin{table}[htbp]
+\centering
+\caption{Default model parameters.}
+\label{tab:model_parameters}
+\begin{tabular}{llll}
+\hline
+Parameter & Symbol & Value & Units \\
+\hline
+\multicolumn{4}{l}{\textit{Heat transfer fluid (Syltherm 800 at $T_{\text{ref}} = 300$°C)}} \\
+\hline
+Density & $\rho_f$ & $\rho_f(T_{\text{ref}})$ & \si{\kilogram\per\cubic\meter} \\
+Specific heat & $c_{p,f}$ & $c_{p,f}(T_{\text{ref}})$ & \si{\joule\per\kilogram\per\kelvin} \\
+Thermal conductivity & $k_f$ & $k_f(T_{\text{ref}})$ & \si{\watt\per\meter\per\kelvin} \\
+Dynamic viscosity & $\mu_f$ & $\mu_f(T_{\text{ref}})$ & \si{\pascal\second} \\
+Thermal diffusivity & $\alpha_f$ & 0.25 & \si{\square\meter\per\second} \\
+\hline
+\multicolumn{4}{l}{\textit{Absorber pipe (steel)}} \\
+\hline
+Length & $L$ & 100 & \si{\meter} \\
+Inner diameter & $D$ & 0.07 & \si{\meter} \\
+Wall thickness & $d$ & 0.006 & \si{\meter} \\
+Density & $\rho_p$ & 7850 & \si{\kilogram\per\cubic\meter} \\
+Specific heat & $c_{p,p}$ & 450 & \si{\joule\per\kilogram\per\kelvin} \\
+Thermal conductivity & $k_p$ & 50 & \si{\watt\per\meter\per\kelvin} \\
+External heat transfer coeff. & $h_{\text{ext}}$ & 20 & \si{\watt\per\square\meter\per\kelvin} \\
+Ambient temperature & $T_{\text{amb}}$ & 293.15 & \si{\kelvin} \\
+\hline
+\multicolumn{4}{l}{\textit{Solar collector}} \\
+\hline
+Concentration factor & $c$ & 26 & -- \\
+Optical efficiency & $\epsilon$ & 0.8 & -- \\
+\hline
+\end{tabular}
+\end{table}
+
+\end{document}
