@@ -1,0 +1,45 @@
+metadata:
+  name: 300C Inlet Initial Steady State Variable Properties Test
+  description: Constant inputs starting at steady-state conditions with 300 C inlet and temperature-dependent fluid properties and heat transfer coefficient
+
+system:
+  name: TCP-100 Collector
+  model:
+    module: solar_collector.solar_collector_dae_pyo_two_temp
+    create_params:
+      t_final: 3900.0  # 65 minutes
+      constant_density: false
+      constant_viscosity: false
+      constant_thermal_conductivity: false
+      constant_specific_heat: false
+      constant_heat_transfer_coeff: false
+      T_ambient: 298.15  # 25°C in Kelvin
+
+simulation:
+  n_x: 110
+  n_t: 130
+  solver:
+    max_iter: 1000
+    tol: 1.0e-6
+    print_level: 0
+    tee: false
+
+initial_conditions:
+  # Use steady-state initial conditions computed from inputs at t=0
+  initial_steady_state: true
+
+inputs:
+  # Mass flow rate [kg/s]
+  mass_flow_rate:
+    ConstantInput:
+      value: 1.032
+
+  # Inlet temperature [K]
+  T_inlet:
+    ConstantInput:
+      value: 573.15
+
+  # Solar irradiance [W/m²]
+  irradiance:
+    ConstantInput:
+          value: 0.0

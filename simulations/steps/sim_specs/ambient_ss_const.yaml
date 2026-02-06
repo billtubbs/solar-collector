@@ -1,0 +1,45 @@
+metadata:
+  name: Ambient Constant Inputs and Properties Test
+  description: Constant inputs starting at ambient conditions with constant fluid properties and heat transfer coefficient
+
+system:
+  name: TCP-100 Collector
+  model:
+    module: solar_collector.solar_collector_dae_pyo_two_temp
+    create_params:
+      t_final: 300.0  # 5 minutes
+      constant_density: true
+      constant_viscosity: true
+      constant_thermal_conductivity: true
+      constant_specific_heat: true
+      constant_heat_transfer_coeff: true
+      T_ambient: 298.15  # 25°C in Kelvin
+
+simulation:
+  n_x: 110
+  n_t: 10
+  solver:
+    max_iter: 1000
+    tol: 1.0e-6
+    print_level: 0
+    tee: false
+
+initial_conditions:
+  T_f_initial: 298.15
+  T_p_initial: 298.15
+
+inputs:
+  # Mass flow rate [kg/s]
+  mass_flow_rate:
+    ConstantInput:
+      value: 1.032
+
+  # Inlet temperature [K]
+  T_inlet:
+    ConstantInput:
+      value: 298.15
+
+  # Solar irradiance [W/m²]
+  irradiance:
+    ConstantInput:
+          value: 0.0

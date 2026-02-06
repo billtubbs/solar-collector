@@ -20,6 +20,17 @@ add_pde_constraints(model) -> ConcreteModel
 solve_model(model, ...) -> Results
     Applies finite difference discretization and solves with IPOPT.
 
+run_simulation(model, ...) -> Results
+    Run a simulation with support for sequential runs. On first call,
+    discretizes and sets up constraints. On subsequent calls, updates
+    inputs and initial conditions without re-discretizing. Ideal for
+    running successive simulation steps.
+
+get_final_temperatures(model) -> (T_f_final, T_p_final)
+    Extract final temperature profiles from a solved model. Useful for
+    using one simulation's final state as the next simulation's initial
+    conditions.
+
 Steady-State Model Functions
 ----------------------------
 create_collector_model_steady_state(...) -> ConcreteModel
@@ -127,6 +138,7 @@ def create_collector_model(
     constant_specific_heat=True,
     constant_heat_transfer_coeff=True,
     axial_dispersion_coeff=AXIAL_DISPERSION_COEFF,
+    initial_mass_flow_rate=None,
 ):
     """
     Create Pyomo model for pipe flow heat transport PDE with fluid and wall.
@@ -197,6 +209,11 @@ def create_collector_model(
         This characterizes the effective axial spreading of heat due to
         turbulent eddies, typically 2-3 orders of magnitude larger than
         molecular thermal diffusivity.
+    initial_mass_flow_rate : float, optional
+        Initial mass flow rate [kg/s] used for calculating constant h_int
+        when constant_heat_transfer_coeff=True. If None, uses the value from
+        mass_flow_rate_func(0.0). This is important when input functions are
+        set later via run_simulation() rather than at model creation time.
 
     Returns
     -------
@@ -379,7 +396,11 @@ def create_collector_model(
     cp_ref = fluid_props.heat_capacity(T_ref)
 
     # Calculate initial velocity from mass flow rate
-    m_dot_initial = mass_flow_rate_func(0.0)
+    # Use initial_mass_flow_rate if provided, otherwise call mass_flow_rate_func(0.0)
+    if initial_mass_flow_rate is not None:
+        m_dot_initial = initial_mass_flow_rate
+    else:
+        m_dot_initial = mass_flow_rate_func(0.0)
     v_initial = m_dot_initial / (rho_ref * pipe_area)
 
     # Calculate h_int at T_ref for printing and constant case
@@ -724,6 +745,497 @@ def solve_model(
     results = solver.solve(model, tee=tee)
 
     return results
+
+
+def compute_steady_state_initial_conditions(
+    model,
+    n_x=110,
+    max_iter=1000,
+    tol=1e-6,
+    print_level=0,
+    tee=False,
+):
+    """
+    Compute steady-state temperature profiles for use as initial conditions.
+
+    Evaluates the input functions at t=0 and solves a steady-state model
+    to find the equilibrium temperature profiles T_f(x) and T_p(x).
+
+    Parameters
+    ----------
+    model : pyomo.ConcreteModel
+        The dynamic model created by create_collector_model(). Must have
+        input functions (mass_flow_rate_func, irradiance_func, T_inlet_func)
+        already set.
+    n_x : int, default=110
+        Number of spatial finite elements for steady-state solve.
+    max_iter : int, default=1000
+        Maximum solver iterations.
+    tol : float, default=1e-6
+        Solver tolerance.
+    print_level : int, default=0
+        IPOPT print level.
+    tee : bool, default=False
+        Whether to display solver output.
+
+    Returns
+    -------
+    T_f_ss : numpy.ndarray
+        Steady-state fluid temperature profile [K], shape (n_x+1,).
+    T_p_ss : numpy.ndarray
+        Steady-state pipe wall temperature profile [K], shape (n_x+1,).
+    x_vals : numpy.ndarray
+        Spatial positions [m], shape (n_x+1,).
+    """
+    # Evaluate input functions at t=0
+    m_dot_0 = model.mass_flow_rate_func(0.0)
+    I_0 = model.irradiance_func(0.0)
+    T_inlet_0 = model.T_inlet_func(0.0)
+
+    print("Computing steady-state initial conditions...")
+    print(f"  m_dot(0) = {m_dot_0:.4f} kg/s")
+    print(f"  I(0) = {I_0:.1f} W/m²")
+    print(f"  T_inlet(0) = {T_inlet_0 - ZERO_C:.1f}°C")
+
+    # Create steady-state model with same parameters as dynamic model
+    ss_model = create_collector_model_steady_state(
+        model.fluid_props,
+        L=float(pyo.environ.value(model.L)),
+        mass_flow_rate=m_dot_0,
+        irradiance=I_0,
+        T_inlet=T_inlet_0,
+        T_ref=model.T_ref,
+        T_ambient=float(pyo.environ.value(model.T_ambient)),
+        D=float(pyo.environ.value(model.D)),
+        d=float(pyo.environ.value(model.d)),
+        h_ext=float(pyo.environ.value(model.h_ext)),
+        concentration_factor=float(pyo.environ.value(model.c)),
+        optical_efficiency=float(pyo.environ.value(model.epsilon)),
+        axial_dispersion_coeff=float(pyo.environ.value(model.D_ax)),
+        constant_density=model.constant_density,
+        constant_viscosity=model.constant_viscosity,
+        constant_thermal_conductivity=model.constant_thermal_conductivity,
+        constant_specific_heat=model.constant_specific_heat,
+        constant_heat_transfer_coeff=model.constant_heat_transfer_coeff,
+    )
+
+    # Add constraints and solve
+    ss_model = add_steady_state_constraints(ss_model)
+    ss_results = solve_steady_state_model(
+        ss_model,
+        n_x=n_x,
+        max_iter=max_iter,
+        tol=tol,
+        print_level=print_level,
+        tee=tee,
+    )
+
+    if ss_results.solver.termination_condition.name not in [
+        "optimal",
+        "locallyOptimal",
+    ]:
+        raise RuntimeError(
+            f"Steady-state solve failed: {ss_results.solver.termination_condition}"
+        )
+
+    # Extract temperature profiles
+    x_vals = np.array(sorted(ss_model.x))
+    T_f_ss = np.array([pyo.environ.value(ss_model.T_f[x]) for x in x_vals])
+    T_p_ss = np.array([pyo.environ.value(ss_model.T_p[x]) for x in x_vals])
+
+    print(
+        f"  Steady-state T_f: {T_f_ss[0] - ZERO_C:.1f}°C to {T_f_ss[-1] - ZERO_C:.1f}°C"
+    )
+    print(
+        f"  Steady-state T_p: {T_p_ss[0] - ZERO_C:.1f}°C to {T_p_ss[-1] - ZERO_C:.1f}°C"
+    )
+
+    return T_f_ss, T_p_ss, x_vals
+
+
+def run_simulation(
+    model,
+    mass_flow_rate_func=None,
+    irradiance_func=None,
+    T_inlet_func=None,
+    T_f_initial=None,
+    T_p_initial=None,
+    initial_steady_state=False,
+    n_x=110,
+    n_t=50,
+    max_iter=1000,
+    tol=1e-6,
+    print_level=5,
+    tee=True,
+):
+    """
+    Run a simulation, handling both first-time setup and subsequent runs.
+
+    This function is designed for sequential simulations where you want to
+    reuse the discretized model structure but update inputs and initial
+    conditions between runs.
+
+    On first call:
+    - Optionally computes steady-state initial conditions
+    - Adds PDE constraints with mutable initial condition parameters
+    - Discretizes the model (finite difference)
+    - Adds outlet boundary conditions
+    - Solves
+
+    On subsequent calls:
+    - Updates input functions (if provided)
+    - Updates initial condition parameters (if provided)
+    - Re-solves without re-discretizing
+
+    Parameters
+    ----------
+    model : pyomo.ConcreteModel
+        The model created by create_collector_model(). Can be fresh or
+        previously run through run_simulation().
+    mass_flow_rate_func : callable, optional
+        Function m_dot(t) returning mass flow rate [kg/s].
+    irradiance_func : callable, optional
+        Function I(t) returning solar irradiance [W/m²].
+    T_inlet_func : callable, optional
+        Function T_inlet(t) returning inlet temperature [K].
+    T_f_initial : float or array-like, optional
+        Initial fluid temperature [K]. Can be:
+        - float: uniform temperature for all x
+        - array: temperature at each x point (after discretization)
+        - None: use steady-state (if initial_steady_state=True) or defaults
+    T_p_initial : float or array-like, optional
+        Initial pipe wall temperature [K]. Same format as T_f_initial.
+    initial_steady_state : bool, default=False
+        If True and T_f_initial/T_p_initial are None, compute steady-state
+        initial conditions by evaluating input functions at t=0 and solving
+        a steady-state model. This ensures the simulation starts from a
+        physically meaningful equilibrium state.
+    n_x : int, default=110
+        Number of spatial finite elements (only used on first call).
+    n_t : int, default=50
+        Number of temporal finite elements (only used on first call).
+    max_iter : int, default=1000
+        Maximum IPOPT iterations.
+    tol : float, default=1e-6
+        Solver tolerance.
+    print_level : int, default=5
+        IPOPT print level (0=silent, 5=verbose).
+    tee : bool, default=True
+        Whether to display solver output.
+
+    Returns
+    -------
+    results : pyomo solver results object
+        Contains solver status, termination condition, and solution.
+
+    Example
+    -------
+    >>> # Simulation starting from steady-state
+    >>> model = create_collector_model(fluid_props, t_final=60.0, ...)
+    >>> results = run_simulation(
+    ...     model,
+    ...     irradiance_func=lambda t: 800.0 if t < 30 else 0.0,
+    ...     initial_steady_state=True,  # Start from steady-state at t=0
+    ... )
+    >>>
+    >>> # Second simulation: use final state as initial condition
+    >>> T_f_final, T_p_final = get_final_temperatures(model)
+    >>> results = run_simulation(
+    ...     model,
+    ...     irradiance_func=lambda t: 600.0,
+    ...     T_f_initial=T_f_final,
+    ...     T_p_initial=T_p_final,
+    ... )
+    """
+    # Check if this is the first run (model not yet discretized)
+    first_run = not hasattr(model, "_discretized")
+
+    # Update input functions if provided
+    if mass_flow_rate_func is not None:
+        model.mass_flow_rate_func = mass_flow_rate_func
+    if irradiance_func is not None:
+        model.irradiance_func = irradiance_func
+    if T_inlet_func is not None:
+        model.T_inlet_func = T_inlet_func
+
+    # Compute steady-state initial conditions if requested
+    if (
+        first_run
+        and initial_steady_state
+        and T_f_initial is None
+        and T_p_initial is None
+    ):
+        T_f_initial, T_p_initial, _ = compute_steady_state_initial_conditions(
+            model,
+            n_x=n_x,
+            max_iter=max_iter,
+            tol=tol,
+            print_level=print_level,
+            tee=tee,
+        )
+
+    if first_run:
+        # =====================================================================
+        # First run: Set up constraints, discretize, and solve
+        # =====================================================================
+
+        # Store initial conditions as mutable Params (will be created after
+        # discretization when we know the x points)
+        model._T_f_initial_value = (
+            T_f_initial if T_f_initial is not None else ZERO_C + 270.0
+        )
+        model._T_p_initial_value = (
+            T_p_initial if T_p_initial is not None else ZERO_C + 210.0
+        )
+
+        # Add PDE constraints (but NOT initial conditions yet - we'll add
+        # those after discretization with mutable Params)
+        _add_pde_constraints_no_ic(model)
+
+        # Apply finite difference discretization
+        TransformationFactory("dae.finite_difference").apply_to(
+            model, nfe=n_x, scheme="CENTRAL", wrt=model.x
+        )
+        TransformationFactory("dae.finite_difference").apply_to(
+            model, nfe=n_t, scheme="BACKWARD", wrt=model.t
+        )
+
+        # Now add mutable initial condition Params and constraints
+        x_vals = sorted(model.x)
+        model._x_vals = x_vals  # Store for later use
+
+        # Create mutable Params for initial conditions
+        def _init_T_f(m, x):
+            if np.isscalar(m._T_f_initial_value):
+                return m._T_f_initial_value
+            else:
+                idx = x_vals.index(x)
+                return m._T_f_initial_value[idx]
+
+        def _init_T_p(m, x):
+            if np.isscalar(m._T_p_initial_value):
+                return m._T_p_initial_value
+            else:
+                idx = x_vals.index(x)
+                return m._T_p_initial_value[idx]
+
+        model.T_f_init_param = Param(
+            model.x, initialize=_init_T_f, mutable=True
+        )
+        model.T_p_init_param = Param(
+            model.x, initialize=_init_T_p, mutable=True
+        )
+
+        # Add initial condition constraints using mutable Params
+        @model.Constraint(model.x)
+        def fluid_initial_condition(m, x):
+            if x == 0:
+                return Constraint.Skip
+            return m.T_f[0, x] == m.T_f_init_param[x]
+
+        @model.Constraint(model.x)
+        def wall_initial_condition(m, x):
+            return m.T_p[0, x] == m.T_p_init_param[x]
+
+        # Add outlet boundary conditions (zero gradient)
+        @model.Constraint(model.t)
+        def fluid_outlet_bc(m, t):
+            if t == 0:
+                return Constraint.Skip
+            x_outlet = x_vals[-1]
+            x_before = x_vals[-2]
+            return m.T_f[t, x_outlet] == m.T_f[t, x_before]
+
+        @model.Constraint(model.t)
+        def wall_outlet_bc(m, t):
+            if t == 0:
+                return Constraint.Skip
+            x_outlet = x_vals[-1]
+            x_before = x_vals[-2]
+            return m.T_p[t, x_outlet] == m.T_p[t, x_before]
+
+        # Add objective
+        model.obj = Objective(expr=1)
+
+        # Mark as discretized
+        model._discretized = True
+
+        print(
+            f"Discretized with {len(model.x)} x points and "
+            f"{len(model.t)} t points"
+        )
+
+    else:
+        # =====================================================================
+        # Subsequent run: Update parameters only
+        # =====================================================================
+
+        x_vals = model._x_vals
+
+        # Update initial condition Params if new values provided
+        if T_f_initial is not None:
+            for i, x in enumerate(x_vals):
+                if np.isscalar(T_f_initial):
+                    model.T_f_init_param[x].set_value(T_f_initial)
+                else:
+                    model.T_f_init_param[x].set_value(T_f_initial[i])
+
+        if T_p_initial is not None:
+            for i, x in enumerate(x_vals):
+                if np.isscalar(T_p_initial):
+                    model.T_p_init_param[x].set_value(T_p_initial)
+                else:
+                    model.T_p_init_param[x].set_value(T_p_initial[i])
+
+    # =========================================================================
+    # Common: Update time-varying inputs and solve
+    # =========================================================================
+
+    # Initialize time-varying parameters
+    for t in model.t:
+        model.m_dot[t].set_value(model.mass_flow_rate_func(t))
+        model.I[t].set_value(model.irradiance_func(t))
+        model.T_inlet[t].set_value(model.T_inlet_func(t))
+
+    # Set initial guesses for temperature fields
+    x_vals = model._x_vals if hasattr(model, "_x_vals") else sorted(model.x)
+    for t in model.t:
+        for i, x in enumerate(x_vals):
+            if t == 0:
+                # Use initial condition values as guess
+                T_f_guess = float(model.T_f_init_param[x].value)
+                T_p_guess = float(model.T_p_init_param[x].value)
+            else:
+                # Use inlet temperature as guess for interior points
+                T_f_guess = float(model.T_inlet_func(0))
+                T_p_guess = float(model.T_inlet_func(0)) + 10.0
+            model.T_f[t, x].set_value(T_f_guess)
+            model.T_p[t, x].set_value(T_p_guess)
+
+    # Solve
+    solver = SolverFactory("ipopt")
+    solver.options["max_iter"] = max_iter
+    solver.options["tol"] = tol
+    solver.options["print_level"] = print_level
+
+    print("Solving with IPOPT...")
+    results = solver.solve(model, tee=tee)
+
+    return results
+
+
+def _add_pde_constraints_no_ic(model):
+    """
+    Add PDE constraints without initial conditions.
+
+    This is a helper for run_simulation() which adds initial conditions
+    separately using mutable Params after discretization.
+    """
+
+    # Fluid temperature PDE constraint
+    @model.Constraint(model.t, model.x)
+    def fluid_pde_constraint(m, t, x):
+        if t == 0:
+            return Constraint.Skip
+        if x == 0:
+            return Constraint.Skip
+
+        heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+        rho_cp = m.rho_f[t, x] * m.cp_f[t, x]
+        return (
+            rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t, x] * m.dT_f_dx[t, x]
+            == rho_cp * m.D_ax * m.d2T_f_dx2[t, x] + heat_to_fluid
+        )
+
+    # Pipe wall temperature PDE constraint
+    @model.Constraint(model.t, model.x)
+    def wall_pde_constraint(m, t, x):
+        if t == 0:
+            return Constraint.Skip
+
+        rho_cp = m.rho_p * m.cp_p
+
+        if x <= m.L:
+            q_eff = m.I[t] * m.c * m.epsilon / 2.0
+            D_outer = m.D + 2 * m.d
+            heat_input_volumetric = (
+                q_eff * 4.0 * D_outer / (D_outer**2 - m.D**2)
+            )
+            heat_to_fluid = (
+                m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+            )
+            heat_loss_volumetric = (
+                m.h_ext
+                * 4.0
+                * D_outer
+                * (m.T_p[t, x] - m.T_ambient)
+                / (D_outer**2 - m.D**2)
+            )
+            alpha_p = m.k_p / (m.rho_p * m.cp_p)
+
+            return rho_cp * m.dT_p_dt[t, x] == (
+                rho_cp * alpha_p * m.d2T_p_dx2[t, x]
+                + heat_input_volumetric
+                - heat_to_fluid
+                - heat_loss_volumetric
+            )
+        else:
+            heat_to_fluid = (
+                m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
+            )
+            D_outer = m.D + 2 * m.d
+            heat_loss_volumetric = (
+                m.h_ext
+                * 4.0
+                * D_outer
+                * (m.T_p[t, x] - m.T_ambient)
+                / (D_outer**2 - m.D**2)
+            )
+            alpha_p = m.k_p / rho_cp
+
+            return rho_cp * m.dT_p_dt[t, x] == (
+                rho_cp * alpha_p * m.d2T_p_dx2[t, x]
+                - heat_to_fluid
+                - heat_loss_volumetric
+            )
+
+    # Inlet boundary condition
+    @model.Constraint(model.t)
+    def inlet_bc(m, t):
+        return m.T_f[t, 0] == m.T_inlet[t]
+
+
+def get_final_temperatures(model):
+    """
+    Extract the final temperature profiles from a solved model.
+
+    Useful for using the final state of one simulation as the initial
+    condition for the next simulation.
+
+    Parameters
+    ----------
+    model : pyomo.ConcreteModel
+        A solved model (after run_simulation or solve_model).
+
+    Returns
+    -------
+    T_f_final : numpy.ndarray
+        Fluid temperature at final time, shape (n_x,) [K].
+    T_p_final : numpy.ndarray
+        Pipe wall temperature at final time, shape (n_x,) [K].
+    """
+    t_vals = sorted(model.t)
+    x_vals = sorted(model.x)
+    t_final = t_vals[-1]
+
+    T_f_final = np.array(
+        [pyo.environ.value(model.T_f[t_final, x]) for x in x_vals]
+    )
+    T_p_final = np.array(
+        [pyo.environ.value(model.T_p[t_final, x]) for x in x_vals]
+    )
+
+    return T_f_final, T_p_final
 
 
 # =============================================================================
@@ -1225,12 +1737,169 @@ def plot_steady_state_results(
 # =============================================================================
 
 
+def ensure_min_yrange(ax, min_range):
+    """
+    Expand y-axis limits if the current range is smaller than min_range.
+
+    The axis is expanded symmetrically around the center of the current range.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        The axes object to modify.
+    min_range : float
+        Minimum y-axis range. If current range is smaller, the axis will
+        be expanded.
+
+    Example
+    -------
+    >>> ax.plot(x, y)
+    >>> ensure_min_yrange(ax, min_range=0.1)
+    """
+    ymin, ymax = ax.get_ylim()
+    current_range = ymax - ymin
+    if current_range < min_range:
+        center = (ymin + ymax) / 2
+        ax.set_ylim(center - min_range / 2, center + min_range / 2)
+
+
+def plot_spatial_profiles(
+    x_vals,
+    data_series,
+    title="Spatial Profiles",
+    colors=None,
+    figsize=(10, 6),
+    min_yrange=None,
+    xlabel="Position [m]",
+    sharex=False,
+    sharey=False,
+):
+    """
+    Plot multiple spatial profiles on vertically stacked subplots.
+
+    Parameters
+    ----------
+    x_vals : array-like
+        Position values for x-axis [m].
+    data_series : list of dict
+        List of dictionaries, each containing:
+        - 'lines': list of dict for multiple lines on same subplot,
+          each with 'y' (required), plus optional 'label', 'color', 'linestyle',
+          and any other ax.plot() kwargs (e.g., 'marker', 'linewidth', 'alpha')
+        - 'ylabel': str, y-axis label (required)
+        - 'title': str, subplot title (optional)
+        - 'min_yrange': float, minimum y-axis range for this subplot (optional)
+    title : str, default="Spatial Profiles"
+        Overall figure title.
+    colors : dict, optional
+        Color scheme dictionary.
+    figsize : tuple, default=(10, 6)
+        Figure size (width, height) in inches.
+    min_yrange : float, optional
+        Minimum y-axis range for all subplots.
+    xlabel : str, default="Position [m]"
+        Label for x-axis.
+    sharex : bool, default=False
+        Share x-axis across all subplots.
+    sharey : bool, default=False
+        Share y-axis across all subplots (useful for comparing scales).
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure object.
+    axes : list of matplotlib.axes.Axes
+        List of axes objects.
+
+    Example
+    -------
+    >>> data = [
+    ...     {
+    ...         'lines': [
+    ...             {'y': T_f_initial, 'label': 'Oil', 'color': 'blue'},
+    ...             {'y': T_p_initial, 'label': 'Wall', 'color': 'red'},
+    ...         ],
+    ...         'ylabel': 'Temperature [°C]',
+    ...         'title': 'Initial Temperatures',
+    ...     },
+    ...     {
+    ...         'lines': [
+    ...             {'y': T_f_final, 'label': 'Oil', 'color': 'blue'},
+    ...             {'y': T_p_final, 'label': 'Wall', 'color': 'red'},
+    ...         ],
+    ...         'ylabel': 'Temperature [°C]',
+    ...         'title': 'Final Temperatures',
+    ...     },
+    ... ]
+    >>> fig, axes = plot_spatial_profiles(x, data, title="Temperature Profiles")
+    """
+    if colors is None:
+        colors = PLOT_COLORS
+
+    n_plots = len(data_series)
+    fig, axes = plt.subplots(
+        n_plots, 1, figsize=figsize, sharex=sharex, sharey=sharey
+    )
+
+    # Handle single subplot case
+    if n_plots == 1:
+        axes = [axes]
+
+    for i, (ax, series) in enumerate(zip(axes, data_series)):
+        subplot_title = series.get("title", "")
+        if title and subplot_title:
+            ax.set_title(f"{title} - {subplot_title}")
+        elif subplot_title:
+            ax.set_title(subplot_title)
+
+        # Plot lines
+        if "lines" in series:
+            for line in series["lines"]:
+                # Extract known keys, pass rest as kwargs to ax.plot
+                y_data = line["y"]
+                plot_kwargs = {"linewidth": 2, "linestyle": "-"}  # defaults
+                for key, value in line.items():
+                    if key != "y":
+                        plot_kwargs[key] = value
+                ax.plot(x_vals, y_data, **plot_kwargs)
+            if any("label" in line for line in series["lines"]):
+                ax.legend()
+        elif "y" in series:
+            # Single line case
+            y_data = series["y"]
+            plot_kwargs = {"linewidth": 2, "linestyle": "-"}  # defaults
+            for key, value in series.items():
+                if key not in ("y", "ylabel", "title", "min_yrange", "lines"):
+                    plot_kwargs[key] = value
+            ax.plot(x_vals, y_data, **plot_kwargs)
+            if "label" in series:
+                ax.legend()
+
+        ax.set_ylabel(series.get("ylabel", ""))
+        ax.grid(True, alpha=0.3)
+
+        # Apply minimum y-range if specified (per-subplot overrides global)
+        subplot_min_yrange = series.get("min_yrange", min_yrange)
+        if subplot_min_yrange is not None:
+            ensure_min_yrange(ax, subplot_min_yrange)
+
+        # Only add x-label to bottom subplot
+        if i == n_plots - 1:
+            ax.set_xlabel(xlabel)
+
+    plt.tight_layout()
+    return fig, axes
+
+
 def plot_time_series(
     t_vals,
     data_series,
     title="Time Series",
     colors=None,
     figsize=(8, 7.5),
+    min_yrange=0.22,
+    sharex=False,
+    sharey=False,
 ):
     """
     Plot multiple time series on vertically stacked subplots.
@@ -1241,19 +1910,31 @@ def plot_time_series(
         Time values for x-axis.
     data_series : list of dict
         List of dictionaries, each containing:
-        - 'y': array-like of y values (required)
+        - 'y': array-like of y values (required for single line)
         - 'ylabel': str, y-axis label (required)
-        - 'label': str, legend label (optional, for multi-line plots)
         - 'title': str, subplot title (optional)
-        - 'color': str, line color (optional)
         - 'lines': list of dict for multiple lines on same subplot,
-          each with 'y', 'label', 'color' (optional)
+          each with 'y' (required), plus optional 'label', 'color',
+          and any other ax.plot() kwargs (e.g., 'marker', 'linewidth', 'alpha')
+        - 'min_yrange': float, minimum y-axis range for this subplot (optional,
+          overrides the global min_yrange parameter)
+        - For single line plots, any ax.plot() kwargs can be added directly
+          (e.g., 'color', 'label', 'linestyle', 'marker', 'alpha')
     title : str, default="Time Series"
         Overall figure title (used as prefix for subplot titles).
     colors : dict, optional
         Color scheme dictionary.
     figsize : tuple, default=(8, 7.5)
         Figure size (width, height) in inches.
+    min_yrange : float, optional
+        Minimum y-axis range for all subplots. If the data range is smaller
+        than this value, the y-axis will be expanded symmetrically around
+        the center. Can be overridden per-subplot via 'min_yrange' in the
+        data_series dict. Default is None (no minimum).
+    sharex : bool, default=False
+        Share x-axis across all subplots.
+    sharey : bool, default=False
+        Share y-axis across all subplots (useful for comparing scales).
 
     Returns
     -------
@@ -1278,7 +1959,9 @@ def plot_time_series(
         colors = PLOT_COLORS
 
     n_plots = len(data_series)
-    fig, axes = plt.subplots(n_plots, 1, figsize=figsize)
+    fig, axes = plt.subplots(
+        n_plots, 1, figsize=figsize, sharex=sharex, sharey=sharey
+    )
 
     # Handle single subplot case
     if n_plots == 1:
@@ -1294,28 +1977,227 @@ def plot_time_series(
         # Check if multiple lines on this subplot
         if "lines" in series:
             for line in series["lines"]:
-                color = line.get("color", None)
-                label = line.get("label", None)
-                ax.plot(
-                    t_vals, line["y"], color=color, linewidth=2, label=label
-                )
+                # Extract y data, pass rest as kwargs to ax.plot
+                y_data = line["y"]
+                plot_kwargs = {"linewidth": 2}  # default
+                for key, value in line.items():
+                    if key != "y":
+                        plot_kwargs[key] = value
+                ax.plot(t_vals, y_data, **plot_kwargs)
             if any("label" in line for line in series["lines"]):
                 ax.legend()
         else:
-            color = series.get("color", None)
-            label = series.get("label", None)
-            ax.plot(t_vals, series["y"], color=color, linewidth=2, label=label)
-            if label:
+            # Single line case
+            y_data = series["y"]
+            plot_kwargs = {"linewidth": 2}  # default
+            for key, value in series.items():
+                if key not in ("y", "ylabel", "title", "min_yrange", "lines"):
+                    plot_kwargs[key] = value
+            ax.plot(t_vals, y_data, **plot_kwargs)
+            if "label" in series:
                 ax.legend()
 
         ax.set_ylabel(series.get("ylabel", ""))
         ax.grid(True, alpha=0.3)
+
+        # Apply minimum y-range if specified (per-subplot overrides global)
+        subplot_min_yrange = series.get("min_yrange", min_yrange)
+        if subplot_min_yrange is not None:
+            ensure_min_yrange(ax, subplot_min_yrange)
 
         # Only add x-label to bottom subplot
         if i == n_plots - 1:
             ax.set_xlabel("Time [s]")
 
     plt.tight_layout()
+    return fig, axes
+
+
+def plot_time_series_comparison(
+    simulations,
+    title="Time Series Comparison",
+    colors=None,
+    figsize=(8, 9),
+    min_yrange=None,
+    linestyles=None,
+    alpha=0.75,
+):
+    """
+    Plot time series from multiple simulations overlaid on the same subplots.
+
+    Each simulation is plotted with a different line style for easy comparison.
+    A legend identifying the simulations is placed at the bottom of the figure.
+
+    Parameters
+    ----------
+    simulations : list of tuple
+        List of (t_vals, data_series, label) tuples, where:
+        - t_vals: array-like of time values
+        - data_series: list of dicts (same format as plot_time_series)
+        - label: str, label for this simulation in the legend
+    title : str, default="Time Series Comparison"
+        Overall figure title.
+    colors : dict, optional
+        Color scheme dictionary. Colors are shared across simulations;
+        line style distinguishes simulations.
+    figsize : tuple, default=(8, 9)
+        Figure size (width, height) in inches.
+    min_yrange : float, optional
+        Minimum y-axis range for all subplots.
+    linestyles : list of str, optional
+        Line styles for each simulation. Default is ['-', '--', ':'].
+    alpha : float, default=0.75
+        Line transparency (0=transparent, 1=opaque). Helps visibility
+        when lines overlap.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure object.
+    axes : list of matplotlib.axes.Axes
+        List of axes objects.
+
+    Example
+    -------
+    >>> sim1_data = [
+    ...     {'y': velocity1, 'ylabel': 'Velocity [m/s]', 'title': 'Velocity'},
+    ...     {'y': T_outlet1, 'ylabel': 'Outlet Temp [°C]'},
+    ... ]
+    >>> sim2_data = [
+    ...     {'y': velocity2, 'ylabel': 'Velocity [m/s]', 'title': 'Velocity'},
+    ...     {'y': T_outlet2, 'ylabel': 'Outlet Temp [°C]'},
+    ... ]
+    >>> simulations = [
+    ...     (t1, sim1_data, "Simulation 1"),
+    ...     (t2, sim2_data, "Simulation 2"),
+    ... ]
+    >>> fig, axes = plot_time_series_comparison(simulations)
+    """
+    if colors is None:
+        colors = PLOT_COLORS
+
+    if linestyles is None:
+        linestyles = ["-", "--", ":"]
+
+    n_sims = len(simulations)
+    if n_sims > len(linestyles):
+        raise ValueError(
+            f"Too many simulations ({n_sims}) for available linestyles "
+            f"({len(linestyles)}). Provide more linestyles."
+        )
+
+    # Use first simulation to determine number of subplots
+    _, first_data_series, _ = simulations[0]
+    n_plots = len(first_data_series)
+
+    # Create figure with extra space at bottom for legend
+    fig, axes = plt.subplots(n_plots, 1, figsize=figsize)
+
+    # Handle single subplot case
+    if n_plots == 1:
+        axes = [axes]
+
+    # Track line handles for legend (one per simulation)
+    legend_handles = []
+    legend_labels = []
+
+    # Plot each simulation
+    for sim_idx, (t_vals, data_series, sim_label) in enumerate(simulations):
+        linestyle = linestyles[sim_idx]
+        first_line_handle = None
+
+        for i, (ax, series) in enumerate(zip(axes, data_series)):
+            # Set subplot title only on first simulation
+            if sim_idx == 0:
+                subplot_title = series.get("title", "")
+                if title and subplot_title:
+                    ax.set_title(f"{title} - {subplot_title}")
+                elif subplot_title:
+                    ax.set_title(subplot_title)
+
+            # Check if multiple lines on this subplot
+            if "lines" in series:
+                for line in series["lines"]:
+                    y_data = line["y"]
+                    # Build kwargs with defaults, then override with line settings
+                    plot_kwargs = {
+                        "linewidth": 2,
+                        "linestyle": linestyle,
+                        "alpha": alpha,
+                    }
+                    for key, value in line.items():
+                        if key != "y":
+                            plot_kwargs[key] = value
+                    # Force linestyle and alpha from comparison settings
+                    plot_kwargs["linestyle"] = linestyle
+                    plot_kwargs["alpha"] = alpha
+                    (line_handle,) = ax.plot(t_vals, y_data, **plot_kwargs)
+                    # Capture first line handle for legend
+                    if first_line_handle is None:
+                        first_line_handle = line_handle
+            else:
+                y_data = series["y"]
+                plot_kwargs = {
+                    "linewidth": 2,
+                    "linestyle": linestyle,
+                    "alpha": alpha,
+                }
+                for key, value in series.items():
+                    if key not in (
+                        "y",
+                        "ylabel",
+                        "title",
+                        "min_yrange",
+                        "lines",
+                    ):
+                        plot_kwargs[key] = value
+                # Force linestyle and alpha from comparison settings
+                plot_kwargs["linestyle"] = linestyle
+                plot_kwargs["alpha"] = alpha
+                (line_handle,) = ax.plot(t_vals, y_data, **plot_kwargs)
+                if first_line_handle is None:
+                    first_line_handle = line_handle
+
+            # Set labels, grid, and subplot legend only on first simulation
+            if sim_idx == 0:
+                ax.set_ylabel(series.get("ylabel", ""))
+                ax.grid(True, alpha=0.3)
+
+                # Add subplot legend for multi-line plots (Oil vs Wall)
+                if "lines" in series:
+                    if any("label" in line for line in series["lines"]):
+                        ax.legend()
+
+                # Only add x-label to bottom subplot
+                if i == n_plots - 1:
+                    ax.set_xlabel("Time [s]")
+
+        # Store handle for figure legend
+        if first_line_handle is not None:
+            legend_handles.append(first_line_handle)
+            legend_labels.append(sim_label)
+
+    # Apply minimum y-range after all simulations are plotted
+    for i, (ax, series) in enumerate(zip(axes, first_data_series)):
+        subplot_min_yrange = series.get("min_yrange", min_yrange)
+        if subplot_min_yrange is not None:
+            ensure_min_yrange(ax, subplot_min_yrange)
+
+    # Adjust layout to make room for legend at bottom
+    plt.tight_layout()
+    fig.subplots_adjust(bottom=0.12)
+
+    # Add figure-level legend at bottom (after layout adjustment)
+    fig.legend(
+        legend_handles,
+        legend_labels,
+        loc="lower center",
+        ncol=n_sims,
+        bbox_to_anchor=(0.5, 0.01),
+        frameon=True,
+        fontsize=10,
+    )
+
     return fig, axes
 
 
@@ -1432,13 +2314,26 @@ def extract_model_data(model):
         - 'x_vals': position values
         - 'T_f': fluid temperature array (n_t x n_x) in Kelvin
         - 'T_p': pipe wall temperature array (n_t x n_x) in Kelvin
-        - 'v': velocity values at x=0
+        - 'v': velocity values at inlet (x=0)
+        - 'v_outlet': velocity values at collector outlet (x=L)
         - 'I': irradiance values
         - 'T_inlet': inlet temperature values
         - 'L': collector length
+        - 'outlet_idx': index in x_vals corresponding to x=L
+        - 'm_dot': mass flow rate values
+        - 'rho_f_outlet': outlet density values (if temperature-dependent)
+        - 'eta_f_outlet': outlet viscosity values (if temperature-dependent)
+        - 'k_f_outlet': outlet thermal conductivity values (if temperature-dependent)
+        - 'cp_f_outlet': outlet specific heat values (if temperature-dependent)
+        - 'h_int_outlet': outlet heat transfer coefficient (if temperature-dependent)
     """
     t_vals = np.array(sorted(model.t))
     x_vals = np.array(sorted(model.x))
+
+    # Find collector outlet index (at x=L, not L_extended)
+    L = float(pyo.environ.value(model.L))
+    outlet_idx = int(np.argmin(np.abs(x_vals - L)))
+    x_outlet = x_vals[outlet_idx]
 
     # Extract temperature fields
     T_f = np.array(
@@ -1448,25 +2343,170 @@ def extract_model_data(model):
         [[pyo.environ.value(model.T_p[t, x]) for x in x_vals] for t in t_vals]
     )
 
-    # Extract time-varying inputs (at x=0 for velocity)
-    v_vals = np.array(
+    # Extract velocities at inlet (x=0) and outlet (x=L)
+    v_inlet = np.array(
         [pyo.environ.value(model.v[t, x_vals[0]]) for t in t_vals]
+    )
+    v_outlet = np.array(
+        [pyo.environ.value(model.v[t, x_outlet]) for t in t_vals]
     )
     I_vals = np.array([pyo.environ.value(model.I[t]) for t in t_vals])
     T_inlet_vals = np.array(
         [pyo.environ.value(model.T_inlet[t]) for t in t_vals]
     )
 
-    return {
+    # Extract mass flow rate
+    m_dot_vals = np.array([pyo.environ.value(model.m_dot[t]) for t in t_vals])
+
+    data = {
         "t_vals": t_vals,
         "x_vals": x_vals,
         "T_f": T_f,
         "T_p": T_p,
-        "v": v_vals,
+        "v": v_inlet,
+        "v_outlet": v_outlet,
         "I": I_vals,
         "T_inlet": T_inlet_vals,
-        "L": float(pyo.environ.value(model.L)),
+        "L": L,
+        "outlet_idx": outlet_idx,
+        "m_dot": m_dot_vals,
     }
+
+    # Extract temperature-dependent properties at collector outlet (x=L)
+    # Outlet shows temperature variation; inlet stays at constant T_inlet
+    if not getattr(model, "constant_density", True):
+        data["rho_f_outlet"] = np.array(
+            [pyo.environ.value(model.rho_f[t, x_outlet]) for t in t_vals]
+        )
+
+    if not getattr(model, "constant_viscosity", True):
+        data["eta_f_outlet"] = np.array(
+            [pyo.environ.value(model.eta_f[t, x_outlet]) for t in t_vals]
+        )
+
+    if not getattr(model, "constant_thermal_conductivity", True):
+        data["k_f_outlet"] = np.array(
+            [pyo.environ.value(model.k_f[t, x_outlet]) for t in t_vals]
+        )
+
+    if not getattr(model, "constant_specific_heat", True):
+        data["cp_f_outlet"] = np.array(
+            [pyo.environ.value(model.cp_f[t, x_outlet]) for t in t_vals]
+        )
+
+    if not getattr(model, "constant_heat_transfer_coeff", True):
+        data["h_int_outlet"] = np.array(
+            [pyo.environ.value(model.h_int[t, x_outlet]) for t in t_vals]
+        )
+
+    return data
+
+
+def plot_initial_final_temperatures(
+    model=None,
+    data=None,
+    title="Temperature Profiles",
+    colors=None,
+    figsize=(10, 6),
+):
+    """
+    Plot initial and final temperature profiles (fluid and wall vs position).
+
+    Creates two subplots:
+    - Upper: Initial temperatures T_f(t=0, x) and T_p(t=0, x)
+    - Lower: Final temperatures T_f(t=t_final, x) and T_p(t=t_final, x)
+
+    Parameters
+    ----------
+    model : pyomo.ConcreteModel, optional
+        Solved Pyomo model. Either model or data must be provided.
+    data : dict, optional
+        Data dictionary from extract_model_data(). Either model or data
+        must be provided.
+    title : str, default="Temperature Profiles"
+        Overall figure title.
+    colors : dict, optional
+        Color scheme dictionary.
+    figsize : tuple, default=(10, 6)
+        Figure size (width, height) in inches.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure object.
+    axes : list of matplotlib.axes.Axes
+        List of axes objects.
+    """
+    if colors is None:
+        colors = PLOT_COLORS
+
+    # Get data from model if not provided directly
+    if data is None:
+        if model is None:
+            raise ValueError("Either model or data must be provided")
+        data = extract_model_data(model)
+
+    x_vals = data["x_vals"]
+    T_f = data["T_f"]
+    T_p = data["T_p"]
+    L = data["L"]
+
+    # Limit x_vals to collector length L
+    x_mask = x_vals <= L * 1.01  # Small tolerance for numerical precision
+    x_plot = x_vals[x_mask]
+
+    # Extract initial and final temperatures (convert to Celsius)
+    T_f_initial = T_f[0, x_mask] - ZERO_C
+    T_p_initial = T_p[0, x_mask] - ZERO_C
+    T_f_final = T_f[-1, x_mask] - ZERO_C
+    T_p_final = T_p[-1, x_mask] - ZERO_C
+
+    # Build data series for plot_spatial_profiles
+    profile_data = [
+        {
+            "lines": [
+                {
+                    "y": T_f_initial,
+                    "label": "Oil (T_f)",
+                    "color": colors.get("T_f"),
+                },
+                {
+                    "y": T_p_initial,
+                    "label": "Wall (T_p)",
+                    "color": colors.get("T_p"),
+                },
+            ],
+            "ylabel": "Temperature [°C]",
+            "title": "Initial Temperatures (t = 0)",
+        },
+        {
+            "lines": [
+                {
+                    "y": T_f_final,
+                    "label": "Oil (T_f)",
+                    "color": colors.get("T_f"),
+                },
+                {
+                    "y": T_p_final,
+                    "label": "Wall (T_p)",
+                    "color": colors.get("T_p"),
+                },
+            ],
+            "ylabel": "Temperature [°C]",
+            "title": f"Final Temperatures (t = {data['t_vals'][-1]:.0f} s)",
+        },
+    ]
+
+    fig, axes = plot_spatial_profiles(
+        x_plot,
+        profile_data,
+        title=title,
+        colors=colors,
+        figsize=figsize,
+        sharey=True,
+    )
+
+    return fig, axes
 
 
 def plot_results(

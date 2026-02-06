@@ -19,8 +19,11 @@ from solar_collector.solar_collector_dae_pyo_two_temp import (
     ZERO_C,
     add_pde_constraints,
     add_steady_state_constraints,
+    compute_steady_state_initial_conditions,
     create_collector_model,
     create_collector_model_steady_state,
+    get_final_temperatures,
+    run_simulation,
     solve_model,
     solve_steady_state_model,
 )
@@ -928,3 +931,162 @@ class TestDynamicWarmInletSteadyState:
         # (high mass flow rate limits the cooling)
         assert delta_T > 0  # Temperature decreases
         assert delta_T < 50  # But not by more than 50°C
+
+
+class TestInitialSteadyState:
+    """Tests for initial_steady_state feature in run_simulation().
+
+    The initial_steady_state option computes steady-state temperature profiles
+    using the input functions evaluated at t=0, then uses those as initial
+    conditions for the dynamic simulation.
+    """
+
+    @pytest.fixture
+    def test_conditions(self):
+        """Operating conditions for steady-state initialization test."""
+        return {
+            "T_inlet_C": 270.0,
+            "DNI": 800.0,
+            "T_ambient_C": 25.0,
+            "mass_flow_rate": 1.0,  # kg/s (different from default 0.516)
+        }
+
+    def test_compute_steady_state_initial_conditions(
+        self, fluid_props, test_conditions
+    ):
+        """Test compute_steady_state_initial_conditions function."""
+        cond = test_conditions
+
+        # Create a model with input functions
+        # Pass initial_mass_flow_rate so h_int is calculated correctly
+        model = create_collector_model(
+            fluid_props,
+            t_final=60.0,
+            T_ambient=ZERO_C + cond["T_ambient_C"],
+            constant_density=True,
+            constant_viscosity=True,
+            constant_thermal_conductivity=True,
+            constant_specific_heat=True,
+            constant_heat_transfer_coeff=True,
+            initial_mass_flow_rate=cond["mass_flow_rate"],
+        )
+
+        # Set input functions
+        model.mass_flow_rate_func = lambda t: cond["mass_flow_rate"]
+        model.irradiance_func = lambda t: cond["DNI"]
+        model.T_inlet_func = lambda t: ZERO_C + cond["T_inlet_C"]
+
+        # Compute steady-state initial conditions
+        T_f_ss, T_p_ss, x_vals = compute_steady_state_initial_conditions(
+            model, n_x=50, print_level=0, tee=False
+        )
+
+        # Verify shapes
+        assert len(T_f_ss) == len(x_vals)
+        assert len(T_p_ss) == len(x_vals)
+
+        # With I > 0, fluid temperature should increase along the pipe
+        # (absorbing solar energy)
+        assert T_f_ss[-1] > T_f_ss[0]
+
+        # Wall temperature profile depends on inlet conditions and heat transfer
+        # Near inlet: wall is hotter than cold incoming fluid
+        # Near outlet: heated fluid approaches wall temperature
+        # Just verify wall temperatures are above ambient
+        assert T_p_ss.min() > ZERO_C + cond["T_ambient_C"]
+
+        # Inlet fluid temperature should match T_inlet
+        assert abs(T_f_ss[0] - (ZERO_C + cond["T_inlet_C"])) < 1.0
+
+    def test_run_simulation_with_initial_steady_state(
+        self, fluid_props, test_conditions
+    ):
+        """Test run_simulation with initial_steady_state=True."""
+        cond = test_conditions
+
+        # Pass initial_mass_flow_rate so h_int is calculated correctly
+        model = create_collector_model(
+            fluid_props,
+            t_final=60.0,
+            T_ambient=ZERO_C + cond["T_ambient_C"],
+            constant_density=True,
+            constant_viscosity=True,
+            constant_thermal_conductivity=True,
+            constant_specific_heat=True,
+            constant_heat_transfer_coeff=True,
+            initial_mass_flow_rate=cond["mass_flow_rate"],
+        )
+
+        # Run simulation with steady-state initialization
+        results = run_simulation(
+            model,
+            mass_flow_rate_func=lambda t: cond["mass_flow_rate"],
+            irradiance_func=lambda t: cond["DNI"],
+            T_inlet_func=lambda t: ZERO_C + cond["T_inlet_C"],
+            initial_steady_state=True,
+            n_x=30,
+            n_t=10,
+            print_level=0,
+            tee=False,
+        )
+
+        # Check solver succeeded
+        assert results.solver.termination_condition.name in ["optimal", "locallyOptimal"]
+
+        # Get final temperatures
+        T_f_final, T_p_final = get_final_temperatures(model)
+
+        # Since inputs are constant and we start from steady-state,
+        # temperatures should not change significantly
+        x_vals = sorted(model.x)
+        T_f_initial = np.array([value(model.T_f_init_param[x]) for x in x_vals])
+        T_p_initial = np.array([value(model.T_p_init_param[x]) for x in x_vals])
+
+        # Final should be close to initial (within 2°C for a short simulation)
+        assert np.allclose(T_f_final, T_f_initial, atol=2.0)
+        assert np.allclose(T_p_final, T_p_initial, atol=2.0)
+
+    def test_initial_steady_state_not_used_when_explicit_ic_given(
+        self, fluid_props, test_conditions
+    ):
+        """Test that initial_steady_state is ignored when explicit ICs given."""
+        cond = test_conditions
+
+        # Pass initial_mass_flow_rate so h_int is calculated correctly
+        model = create_collector_model(
+            fluid_props,
+            t_final=60.0,
+            T_ambient=ZERO_C + cond["T_ambient_C"],
+            constant_density=True,
+            constant_viscosity=True,
+            constant_thermal_conductivity=True,
+            constant_specific_heat=True,
+            constant_heat_transfer_coeff=True,
+            initial_mass_flow_rate=cond["mass_flow_rate"],
+        )
+
+        T_f_explicit = ZERO_C + 300.0  # Different from steady-state
+        T_p_explicit = ZERO_C + 280.0
+
+        # Run with both initial_steady_state=True and explicit ICs
+        results = run_simulation(
+            model,
+            mass_flow_rate_func=lambda t: cond["mass_flow_rate"],
+            irradiance_func=lambda t: cond["DNI"],
+            T_inlet_func=lambda t: ZERO_C + cond["T_inlet_C"],
+            T_f_initial=T_f_explicit,
+            T_p_initial=T_p_explicit,
+            initial_steady_state=True,  # Should be ignored
+            n_x=20,
+            n_t=5,
+            print_level=0,
+            tee=False,
+        )
+
+        assert results.solver.termination_condition.name in ["optimal", "locallyOptimal"]
+
+        # Verify explicit ICs were used (check initial param values)
+        x_vals = sorted(model.x)
+        for x in x_vals:
+            assert abs(value(model.T_f_init_param[x]) - T_f_explicit) < 0.01
+            assert abs(value(model.T_p_init_param[x]) - T_p_explicit) < 0.01
