@@ -16,12 +16,10 @@ This will:
 """
 
 import argparse
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import yaml
 
@@ -30,20 +28,18 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from simulate.inputs import (
     ConstantInput,
-    StepInput,
-    RampInput,
     InterpolatedInput,
+    RampInput,
     SinusoidalInput,
+    StepInput,
 )
 from solar_collector.fluid_properties import SYLTHERM800
 from solar_collector.solar_collector_dae_pyo_two_temp import (
     ZERO_C,
     create_collector_model,
-    run_simulation,
-    get_final_temperatures,
     extract_model_data,
+    run_simulation,
 )
-
 
 # Registry of available input classes
 INPUT_CLASSES = {
@@ -113,7 +109,12 @@ def load_sim_spec(yaml_path: Path) -> dict:
         spec = yaml.safe_load(f)
 
     # Basic validation
-    required_sections = ["system", "simulation", "initial_conditions", "inputs"]
+    required_sections = [
+        "system",
+        "simulation",
+        "initial_conditions",
+        "inputs",
+    ]
     # Allow older format with 'run_simulation' instead of 'simulation'
     if "run_simulation" in spec and "simulation" not in spec:
         spec["simulation"] = spec.pop("run_simulation")
@@ -159,27 +160,27 @@ def run_single_simulation(spec: dict, fluid_props) -> dict:
     inputs_spec = spec.get("inputs", {})
 
     # Get model creation parameters
-    create_params = model_spec.get("create_params", model_spec.get("params", {}))
+    create_params = model_spec.get(
+        "create_params", model_spec.get("params", {})
+    )
 
     # Handle t_final which might be in different places
     t_final = create_params.pop("t_final", sim_spec.pop("t_final", 300.0))
-
-    # Get T_ambient (might be in create_params or at top level)
-    T_ambient = create_params.pop("T_ambient", ZERO_C + 25.0)
 
     # Create input functions
     input_funcs = create_input_functions(inputs_spec)
 
     # Get initial mass flow rate for h_int calculation when using constant properties
     mass_flow_rate_func = input_funcs.get("mass_flow_rate_func")
-    initial_mass_flow_rate = mass_flow_rate_func(0.0) if mass_flow_rate_func else None
+    initial_mass_flow_rate = (
+        mass_flow_rate_func(0.0) if mass_flow_rate_func else None
+    )
 
     # Create the model
-    print(f"Creating model...")
+    print("Creating model...")
     model = create_collector_model(
         fluid_props,
         t_final=t_final,
-        T_ambient=T_ambient,
         initial_mass_flow_rate=initial_mass_flow_rate,
         **create_params,
     )
@@ -203,11 +204,15 @@ def run_single_simulation(spec: dict, fluid_props) -> dict:
         T_f_initial = None
         T_p_initial = None
     else:
-        T_f_initial = ic_spec.get("T_f_initial", ic_spec.get("initial_fluid_temp", ZERO_C + 270.0))
-        T_p_initial = ic_spec.get("T_p_initial", ic_spec.get("initial_pipe_temp", ZERO_C + 210.0))
+        T_f_initial = ic_spec.get(
+            "T_f_initial", ic_spec.get("initial_fluid_temp", ZERO_C + 270.0)
+        )
+        T_p_initial = ic_spec.get(
+            "T_p_initial", ic_spec.get("initial_pipe_temp", ZERO_C + 210.0)
+        )
 
     # Run simulation
-    print(f"Running simulation...")
+    print("Running simulation...")
     results = run_simulation(
         model,
         mass_flow_rate_func=input_funcs.get("mass_flow_rate_func"),
@@ -296,7 +301,9 @@ def save_results(sim_result: dict, output_dir: Path, sim_name: str):
     metadata = {
         "simulation_name": sim_name,
         "timestamp": datetime.now().isoformat(),
-        "solver_status": str(sim_result["results"].solver.termination_condition),
+        "solver_status": str(
+            sim_result["results"].solver.termination_condition
+        ),
         "n_x": len(x_vals),
         "n_t": len(t_vals),
         "t_final": float(t_vals[-1]),
@@ -326,16 +333,18 @@ Examples:
         help="Name of experiment (directory in simulations/)",
     )
     parser.add_argument(
-        "--sim", "--spec",
+        "--sim",
+        "--spec",
         nargs="*",
         dest="simulations",
         metavar="NAME",
         help="Run specific simulation(s) by name (without .yaml). "
-             "Supports glob patterns (e.g., 'steps_*'). "
-             "If not specified, runs all simulations.",
+        "Supports glob patterns (e.g., 'steps_*'). "
+        "If not specified, runs all simulations.",
     )
     parser.add_argument(
-        "--list", "-l",
+        "--list",
+        "-l",
         action="store_true",
         help="List available simulations and exit",
     )
@@ -408,15 +417,15 @@ Examples:
     # Run each simulation
     for yaml_file in yaml_files:
         sim_name = yaml_file.stem
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"Processing: {sim_name}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         # Load spec
         spec = load_sim_spec(yaml_file)
 
         if args.dry_run:
-            print(f"Spec loaded successfully (dry run)")
+            print("Spec loaded successfully (dry run)")
             print(f"  System: {spec.get('system', {}).get('name', 'unnamed')}")
             print(f"  Inputs: {list(spec.get('inputs', {}).keys())}")
             continue

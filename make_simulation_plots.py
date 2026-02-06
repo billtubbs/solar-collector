@@ -20,7 +20,8 @@ import sys
 from pathlib import Path
 
 import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend for saving files
+
+matplotlib.use("Agg")  # Non-interactive backend for saving files
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -29,13 +30,13 @@ import yaml
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from solar_collector.solar_collector_dae_pyo_two_temp import (
-    plot_time_series,
-    plot_temperature_field,
-    plot_spatial_profiles,
-    ZERO_C,
-)
 from solar_collector.config import PLOT_COLORS
+from solar_collector.solar_collector_dae_pyo_two_temp import (
+    ZERO_C,
+    plot_spatial_profiles,
+    plot_temperature_field,
+    plot_time_series,
+)
 
 
 def load_simulation_results(results_dir: Path, sim_name: str) -> dict:
@@ -348,6 +349,7 @@ def make_initial_final_plot(
         title=sim_name,
         colors=colors,
         figsize=figsize,
+        min_yrange=0.22,
         sharey=True,
     )
 
@@ -391,14 +393,18 @@ def make_all_plots(
     # Time series plot
     print("  Creating time series plot...")
     fig1 = make_time_series_plot(data, sim_name)
-    fig1.savefig(plots_dir / f"{sim_name}_timeseries.png", dpi=dpi, bbox_inches="tight")
+    fig1.savefig(
+        plots_dir / f"{sim_name}_timeseries.png", dpi=dpi, bbox_inches="tight"
+    )
     plt.close(fig1)
 
     # Initial/final temperature profiles
     print("  Creating initial/final temperature plot...")
     fig2 = make_initial_final_plot(data, sim_name)
     fig2.savefig(
-        plots_dir / f"{sim_name}_initial_final.png", dpi=dpi, bbox_inches="tight"
+        plots_dir / f"{sim_name}_initial_final.png",
+        dpi=dpi,
+        bbox_inches="tight",
     )
     plt.close(fig2)
 
@@ -407,7 +413,9 @@ def make_all_plots(
     fig3 = make_temperature_field_plot(
         data, "T_f", sim_name, temp_range=temp_range
     )
-    fig3.savefig(plots_dir / f"{sim_name}_T_f_field.png", dpi=dpi, bbox_inches="tight")
+    fig3.savefig(
+        plots_dir / f"{sim_name}_T_f_field.png", dpi=dpi, bbox_inches="tight"
+    )
     plt.close(fig3)
 
     # Pipe wall temperature field
@@ -415,7 +423,9 @@ def make_all_plots(
     fig4 = make_temperature_field_plot(
         data, "T_p", sim_name, temp_range=temp_range
     )
-    fig4.savefig(plots_dir / f"{sim_name}_T_p_field.png", dpi=dpi, bbox_inches="tight")
+    fig4.savefig(
+        plots_dir / f"{sim_name}_T_p_field.png", dpi=dpi, bbox_inches="tight"
+    )
     plt.close(fig4)
 
     print(f"  Saved 4 plots to {plots_dir}")
@@ -445,11 +455,12 @@ Examples:
         dest="simulations",
         metavar="NAME",
         help="Process specific simulation(s) by name. "
-             "Supports glob patterns (e.g., 'steps_*'). "
-             "If not specified, processes all simulations.",
+        "Supports glob patterns (e.g., 'steps_*'). "
+        "If not specified, processes all simulations.",
     )
     parser.add_argument(
-        "--list", "-l",
+        "--list",
+        "-l",
         action="store_true",
         help="List available simulations and exit",
     )
@@ -488,12 +499,15 @@ Examples:
     # Select simulations based on --sim argument
     if args.simulations:
         import fnmatch
+
         sim_names = []
         for pattern in args.simulations:
             # Check if pattern contains glob characters
             if "*" in pattern or "?" in pattern or "[" in pattern:
                 # Use glob pattern matching
-                matched = [s for s in all_sim_names if fnmatch.fnmatch(s, pattern)]
+                matched = [
+                    s for s in all_sim_names if fnmatch.fnmatch(s, pattern)
+                ]
                 if not matched:
                     print(f"Warning: No simulations match pattern '{pattern}'")
                 sim_names.extend(matched)

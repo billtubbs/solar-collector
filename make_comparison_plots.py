@@ -22,7 +22,8 @@ import sys
 from pathlib import Path
 
 import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend for saving files
+
+matplotlib.use("Agg")  # Non-interactive backend for saving files
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -31,11 +32,11 @@ import yaml
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from solar_collector.solar_collector_dae_pyo_two_temp import (
-    plot_time_series_comparison,
-    ZERO_C,
-)
 from solar_collector.config import PLOT_COLORS
+from solar_collector.solar_collector_dae_pyo_two_temp import (
+    ZERO_C,
+    plot_time_series_comparison,
+)
 
 
 def load_simulation_results(results_dir: Path, sim_name: str) -> dict:
@@ -113,6 +114,7 @@ def build_time_series_data(data: dict, colors: dict = None) -> list:
 
     # Create position-based colors for velocity (yellowish-green to dark green)
     import matplotlib.pyplot as plt
+
     cmap = plt.colormaps["YlGn"]
     v_inlet_color = cmap(0.3)  # Light yellowish-green for inlet (x=0)
     v_outlet_color = cmap(0.8)  # Dark green for outlet (x=L)
@@ -262,10 +264,11 @@ Examples:
         dest="simulations",
         metavar="NAME",
         help="Simulations to compare (2-3 required). "
-             "Supports glob patterns (e.g., 'steps_*').",
+        "Supports glob patterns (e.g., 'steps_*').",
     )
     parser.add_argument(
-        "--list", "-l",
+        "--list",
+        "-l",
         action="store_true",
         help="List available simulations and exit",
     )
@@ -281,7 +284,8 @@ Examples:
         help="Resolution for saved images (default: 300)",
     )
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         default=None,
         help="Output filename (default: auto-generated from sim names)",
     )
@@ -313,7 +317,9 @@ Examples:
 
     # Require --sim argument for comparison
     if not args.simulations:
-        print("Error: --sim argument required. Specify 2-3 simulations to compare.")
+        print(
+            "Error: --sim argument required. Specify 2-3 simulations to compare."
+        )
         print(f"Available simulations: {', '.join(all_sim_names)}")
         sys.exit(1)
 

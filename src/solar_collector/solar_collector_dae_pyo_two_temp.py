@@ -318,9 +318,16 @@ def create_collector_model(
             return m.fluid_props.heat_capacity(m.T_f[t, x])
 
     # Axial dispersion coefficient for turbulent flow [m²/s]
-    # This characterizes effective axial heat spreading due to turbulent mixing,
-    # typically 2-3 orders of magnitude larger than molecular thermal diffusivity
+    # This characterizes effective axial heat spreading due to turbulent
+    # mixing, typically 2-3 orders of magnitude larger than molecular thermal
+    # diffusivity
     model.D_ax = Param(initialize=axial_dispersion_coeff)
+
+    # Grid spacing for upwind stabilization [m]
+    # Set to actual value after discretization; artificial diffusion
+    # of v*dx/2 is added to the fluid advection term to suppress
+    # oscillations from central differencing at high Peclet numbers.
+    model.dx = Param(initialize=0.0, mutable=True)
 
     # Pipe properties
     model.rho_p = Param(initialize=pipe_density)  # [kg/m³]
@@ -384,7 +391,7 @@ def create_collector_model(
     model.T_inlet = Param(model.t, mutable=True)
 
     # Velocity as Expression: v(t, x) = m_dot(t) / (rho_f(t, x) * A)
-    # This correctly handles mass conservation when density varies with temperature
+    # This handles mass conservation when density varies with temperature
     @model.Expression(model.t, model.x)
     def v(m, t, x):
         return m.m_dot[t] / (m.rho_f[t, x] * m.A)
@@ -396,7 +403,7 @@ def create_collector_model(
     cp_ref = fluid_props.heat_capacity(T_ref)
 
     # Calculate initial velocity from mass flow rate
-    # Use initial_mass_flow_rate if provided, otherwise call mass_flow_rate_func(0.0)
+    # Use initial_mass_flow_rate if provided, otherwise mass_flow_rate_func
     if initial_mass_flow_rate is not None:
         m_dot_initial = initial_mass_flow_rate
     else:
@@ -512,12 +519,15 @@ def add_pde_constraints(
         heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
 
         # Fluid PDE: (energy balance)
-        #   ρcp ∂T_f/∂t + ρcp v(t,x)∂T_f/∂x = ρcp D_ax ∂²T_f/∂x² + q_to_fluid
+        #   ρcp ∂T_f/∂t + ρcp v(t,x)∂T_f/∂x = ρcp D_eff ∂²T_f/∂x² + q_to_fluid
         # Note: v(t,x) = m_dot(t) / (rho_f(t,x) * A) to conserve mass
+        # D_eff = D_ax + v*dx/2 adds upwind artificial diffusion to suppress
+        # oscillations from central differencing at high Peclet numbers.
         rho_cp = m.rho_f[t, x] * m.cp_f[t, x]
+        D_eff = m.D_ax + m.v[t, x] * m.dx / 2
         return (
             rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t, x] * m.dT_f_dx[t, x]
-            == rho_cp * m.D_ax * m.d2T_f_dx2[t, x] + heat_to_fluid
+            == rho_cp * D_eff * m.d2T_f_dx2[t, x] + heat_to_fluid
         )
 
     # Pipe wall temperature PDE constraint
@@ -682,7 +692,8 @@ def solve_model(
     """
 
     # Apply finite difference discretization
-    # Use CENTRAL difference for spatial discretization (better accuracy)
+    # Use CENTRAL difference for spatial discretization
+    # (upwind stabilization is added via artificial diffusion in fluid PDE)
     TransformationFactory("dae.finite_difference").apply_to(
         model, nfe=n_x, scheme="CENTRAL", wrt=model.x
     )
@@ -691,6 +702,10 @@ def solve_model(
     TransformationFactory("dae.finite_difference").apply_to(
         model, nfe=n_t, scheme="BACKWARD", wrt=model.t
     )
+
+    # Set grid spacing for upwind stabilization
+    x_vals_sorted = sorted(model.x)
+    model.dx.set_value(x_vals_sorted[1] - x_vals_sorted[0])
 
     # Outlet boundary conditions (zero gradient)
     @model.Constraint(model.t)
@@ -844,10 +859,12 @@ def compute_steady_state_initial_conditions(
     T_p_ss = np.array([pyo.environ.value(ss_model.T_p[x]) for x in x_vals])
 
     print(
-        f"  Steady-state T_f: {T_f_ss[0] - ZERO_C:.1f}°C to {T_f_ss[-1] - ZERO_C:.1f}°C"
+        f"  Steady-state T_f: {T_f_ss[0] - ZERO_C:.1f}°C to "
+        f"{T_f_ss[-1] - ZERO_C:.1f}°C"
     )
     print(
-        f"  Steady-state T_p: {T_p_ss[0] - ZERO_C:.1f}°C to {T_p_ss[-1] - ZERO_C:.1f}°C"
+        f"  Steady-state T_p: {T_p_ss[0] - ZERO_C:.1f}°C to "
+        f"{T_p_ss[-1] - ZERO_C:.1f}°C"
     )
 
     return T_f_ss, T_p_ss, x_vals
@@ -1004,6 +1021,9 @@ def run_simulation(
         x_vals = sorted(model.x)
         model._x_vals = x_vals  # Store for later use
 
+        # Set grid spacing for upwind stabilization
+        model.dx.set_value(x_vals[1] - x_vals[0])
+
         # Create mutable Params for initial conditions
         def _init_T_f(m, x):
             if np.isscalar(m._T_f_initial_value):
@@ -1142,9 +1162,10 @@ def _add_pde_constraints_no_ic(model):
 
         heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
         rho_cp = m.rho_f[t, x] * m.cp_f[t, x]
+        D_eff = m.D_ax + m.v[t, x] * m.dx / 2
         return (
             rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t, x] * m.dT_f_dx[t, x]
-            == rho_cp * m.D_ax * m.d2T_f_dx2[t, x] + heat_to_fluid
+            == rho_cp * D_eff * m.d2T_f_dx2[t, x] + heat_to_fluid
         )
 
     # Pipe wall temperature PDE constraint
@@ -1364,6 +1385,9 @@ def create_collector_model_steady_state(
     # Axial dispersion coefficient for turbulent flow [m²/s]
     model.D_ax = Param(initialize=axial_dispersion_coeff)
 
+    # Grid spacing for upwind stabilization [m]
+    model.dx = Param(initialize=0.0, mutable=True)
+
     # Solar collector parameters
     model.c = Param(initialize=concentration_factor)
     model.epsilon = Param(initialize=optical_efficiency)
@@ -1498,11 +1522,13 @@ def add_steady_state_constraints(model):
         heat_to_fluid = m.h_int[x] * 4.0 * (m.T_p[x] - m.T_f[x]) / m.D
 
         # Steady-state fluid energy balance:
-        # ρ·cp·v·∂T_f/∂x = ρ·cp·D_ax·∂²T_f/∂x² + heat_to_fluid
+        # ρ·cp·v·∂T_f/∂x = ρ·cp·D_eff·∂²T_f/∂x² + heat_to_fluid
+        # D_eff = D_ax + v*dx/2 adds upwind artificial diffusion
         rho_cp = m.rho_f[x] * m.cp_f[x]
+        D_eff = m.D_ax + m.v[x] * m.dx / 2
         return (
             rho_cp * m.v[x] * m.dT_f_dx[x]
-            == rho_cp * m.D_ax * m.d2T_f_dx2[x] + heat_to_fluid
+            == rho_cp * D_eff * m.d2T_f_dx2[x] + heat_to_fluid
         )
 
     # Pipe wall temperature ODE constraint (steady-state energy balance)
@@ -1602,13 +1628,17 @@ def solve_steady_state_model(
         Contains solver status, termination condition, and solution
         statistics.
     """
-    # Apply finite difference discretization (CENTRAL for 2nd order accuracy)
+    # Apply finite difference discretization (CENTRAL for stability)
+    # (upwind stabilization is added via artificial diffusion in fluid PDE)
     TransformationFactory("dae.finite_difference").apply_to(
         model, nfe=n_x, scheme="CENTRAL", wrt=model.x
     )
 
-    # Outlet boundary conditions (zero gradient)
+    # Set grid spacing for upwind stabilization
     x_vals = sorted(model.x)
+    model.dx.set_value(x_vals[1] - x_vals[0])
+
+    # Outlet boundary conditions (zero gradient)
     x_outlet = x_vals[-1]
     x_before = x_vals[-2]
 
@@ -2013,6 +2043,51 @@ def plot_time_series(
     return fig, axes
 
 
+def _setup_subplot(ax, series, title, is_bottom):
+    """Configure a subplot's title, labels, grid, and legend on first pass."""
+    subplot_title = series.get("title", "")
+    if title and subplot_title:
+        ax.set_title(f"{title} - {subplot_title}")
+    elif subplot_title:
+        ax.set_title(subplot_title)
+
+    ax.set_ylabel(series.get("ylabel", ""))
+    ax.grid(True, alpha=0.3)
+
+    if "lines" in series:
+        if any("label" in line for line in series["lines"]):
+            ax.legend()
+
+    if is_bottom:
+        ax.set_xlabel("Time [s]")
+
+
+def _plot_series(ax, t_vals, series, linestyle, alpha):
+    """Plot one series (single or multi-line) on an axis.
+
+    Returns the first line handle for use in the figure legend.
+    """
+    _NON_PLOT_KEYS = {"y", "ylabel", "title", "min_yrange", "lines"}
+
+    if "lines" in series:
+        line_specs = series["lines"]
+    else:
+        line_specs = [series]
+
+    first_handle = None
+    for spec in line_specs:
+        plot_kwargs = {"linewidth": 2}
+        for key, value in spec.items():
+            if key not in _NON_PLOT_KEYS:
+                plot_kwargs[key] = value
+        plot_kwargs["linestyle"] = linestyle
+        plot_kwargs["alpha"] = alpha
+        (handle,) = ax.plot(t_vals, spec["y"], **plot_kwargs)
+        if first_handle is None:
+            first_handle = handle
+    return first_handle
+
+
 def plot_time_series_comparison(
     simulations,
     title="Time Series Comparison",
@@ -2107,72 +2182,13 @@ def plot_time_series_comparison(
         first_line_handle = None
 
         for i, (ax, series) in enumerate(zip(axes, data_series)):
-            # Set subplot title only on first simulation
             if sim_idx == 0:
-                subplot_title = series.get("title", "")
-                if title and subplot_title:
-                    ax.set_title(f"{title} - {subplot_title}")
-                elif subplot_title:
-                    ax.set_title(subplot_title)
+                _setup_subplot(ax, series, title, is_bottom=(i == n_plots - 1))
 
-            # Check if multiple lines on this subplot
-            if "lines" in series:
-                for line in series["lines"]:
-                    y_data = line["y"]
-                    # Build kwargs with defaults, then override with line settings
-                    plot_kwargs = {
-                        "linewidth": 2,
-                        "linestyle": linestyle,
-                        "alpha": alpha,
-                    }
-                    for key, value in line.items():
-                        if key != "y":
-                            plot_kwargs[key] = value
-                    # Force linestyle and alpha from comparison settings
-                    plot_kwargs["linestyle"] = linestyle
-                    plot_kwargs["alpha"] = alpha
-                    (line_handle,) = ax.plot(t_vals, y_data, **plot_kwargs)
-                    # Capture first line handle for legend
-                    if first_line_handle is None:
-                        first_line_handle = line_handle
-            else:
-                y_data = series["y"]
-                plot_kwargs = {
-                    "linewidth": 2,
-                    "linestyle": linestyle,
-                    "alpha": alpha,
-                }
-                for key, value in series.items():
-                    if key not in (
-                        "y",
-                        "ylabel",
-                        "title",
-                        "min_yrange",
-                        "lines",
-                    ):
-                        plot_kwargs[key] = value
-                # Force linestyle and alpha from comparison settings
-                plot_kwargs["linestyle"] = linestyle
-                plot_kwargs["alpha"] = alpha
-                (line_handle,) = ax.plot(t_vals, y_data, **plot_kwargs)
-                if first_line_handle is None:
-                    first_line_handle = line_handle
+            line_handle = _plot_series(ax, t_vals, series, linestyle, alpha)
+            if first_line_handle is None:
+                first_line_handle = line_handle
 
-            # Set labels, grid, and subplot legend only on first simulation
-            if sim_idx == 0:
-                ax.set_ylabel(series.get("ylabel", ""))
-                ax.grid(True, alpha=0.3)
-
-                # Add subplot legend for multi-line plots (Oil vs Wall)
-                if "lines" in series:
-                    if any("label" in line for line in series["lines"]):
-                        ax.legend()
-
-                # Only add x-label to bottom subplot
-                if i == n_plots - 1:
-                    ax.set_xlabel("Time [s]")
-
-        # Store handle for figure legend
         if first_line_handle is not None:
             legend_handles.append(first_line_handle)
             legend_labels.append(sim_label)
