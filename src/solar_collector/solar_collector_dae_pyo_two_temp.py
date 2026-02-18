@@ -13,7 +13,7 @@ create_collector_model(...) -> ConcreteModel
     variables, derivative variables, physical parameters, and time-varying
     input parameters (v, I, T_inlet). Optionally uses Dittus-Boelter for h_int.
 
-add_pde_constraints(model) -> ConcreteModel
+add_pde_constraints(model, T_f_initial, T_p_initial) -> ConcreteModel
     Adds coupled PDE constraints for fluid and wall, initial conditions,
     and boundary conditions.
 
@@ -469,11 +469,7 @@ def create_collector_model(
     return model
 
 
-def add_pde_constraints(
-    model,
-    T_f_initial=ZERO_C + 270.0,
-    T_p_initial=ZERO_C + 210.0,
-):
+def add_pde_constraints(model, T_f_initial, T_p_initial):
     """
     Add PDE constraints and boundary/initial conditions for both temperatures.
 
@@ -481,11 +477,11 @@ def add_pde_constraints(
     ----------
     model : pyomo.ConcreteModel
         The Pyomo model created by create_collector_model().
-    T_f_initial : float or array-like, default=ZERO_C + 270.0
+    T_f_initial : float or array-like
         Initial fluid temperature [K] at t=0. If float, uniform temperature
         for all x > 0. If array, must match the number of x points after
         discretization (values are mapped to x positions in order).
-    T_p_initial : float or array-like, default=ZERO_C + 210.0
+    T_p_initial : float or array-like
         Initial pipe wall temperature [K] at t=0. If float, uniform
         temperature for all x. If array, must match the number of x points.
 

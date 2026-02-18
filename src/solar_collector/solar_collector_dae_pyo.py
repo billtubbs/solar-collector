@@ -202,7 +202,7 @@ def create_collector_model(
     return model
 
 
-def add_pde_constraints(model):
+def add_pde_constraints(model, T_initial):
     """
     Add PDE constraint and boundary/initial conditions
     """
@@ -266,8 +266,7 @@ def add_pde_constraints(model):
     def initial_condition(m, x):
         if x == 0:
             return Constraint.Skip
-        T_0 = ZERO_C + 270.0  # initial temperature
-        return m.T[0, x] == T_0
+        return m.T[0, x] == T_initial  # initial temperature
 
     # Inlet boundary condition: T(0, t) = T_inlet(t) at all times
     @model.Constraint(model.t)

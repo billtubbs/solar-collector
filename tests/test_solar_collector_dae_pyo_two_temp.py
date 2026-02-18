@@ -28,7 +28,6 @@ from solar_collector.solar_collector_dae_pyo_two_temp import (
     solve_steady_state_model,
 )
 
-
 # =============================================================================
 # Operating Conditions for Test Cases
 # =============================================================================
@@ -295,7 +294,9 @@ class TestAddPdeConstraintsConstantProperties:
             constant_specific_heat=True,
             constant_heat_transfer_coeff=True,
         )
-        return add_pde_constraints(model)
+        return add_pde_constraints(
+            model, T_f_initial=ZERO_C + 270.0, T_p_initial=ZERO_C + 210.0
+        )
 
     def test_fluid_pde_constraint_exists(self, model_with_constraints):
         """Test that fluid PDE constraint is added."""
@@ -338,7 +339,9 @@ class TestAddPdeConstraintsTemperatureDependent:
             constant_specific_heat=False,
             constant_heat_transfer_coeff=False,
         )
-        return add_pde_constraints(model)
+        return add_pde_constraints(
+            model, T_f_initial=ZERO_C + 270.0, T_p_initial=ZERO_C + 210.0
+        )
 
     def test_fluid_pde_constraint_exists(
         self, model_with_constraints_temp_dep
@@ -524,7 +527,9 @@ class TestSolveModelZeroIrradiance:
     def test_fluid_properties_constant_and_correct(
         self, solved_model, fluid_props
     ):
-        """Test fluid properties are constant and match expected values at T_ref."""
+        """Test fluid properties are constant and match expected values at
+        T_ref.
+        """
         model, _ = solved_model
         t_vals = sorted(model.t)
         x_vals = sorted(model.x)
@@ -604,7 +609,9 @@ class TestSteadyStateModelCreation:
         # Check they have scalar values
         assert value(steady_state_model.m_dot) == pytest.approx(7.5)
         assert value(steady_state_model.I) == pytest.approx(800.0)
-        assert value(steady_state_model.T_inlet) == pytest.approx(ZERO_C + 200.0)
+        assert value(steady_state_model.T_inlet) == pytest.approx(
+            ZERO_C + 200.0
+        )
 
 
 class TestSteadyStateSolve:
@@ -641,7 +648,8 @@ class TestSteadyStateSolve:
         ]
 
     def test_temperature_increases_with_irradiance(self, solved_steady_state):
-        """Test that fluid temperature increases along pipe with solar input."""
+        """Test that fluid temperature increases along pipe with solar
+        input."""
         model, _ = solved_steady_state
         x_vals = sorted(model.x)
 
@@ -690,7 +698,9 @@ class TestSteadyStateZeroIrradiance:
         )
         return model, results
 
-    def test_uniform_temperature_equilibrium(self, zero_irradiance_equilibrium):
+    def test_uniform_temperature_equilibrium(
+        self, zero_irradiance_equilibrium
+    ):
         """Test uniform temperature when I=0 and T_inlet = T_ambient."""
         model, _ = zero_irradiance_equilibrium
         x_vals = sorted(model.x)
@@ -822,9 +832,7 @@ class TestDynamicMatchesSteadyState:
             # Should stay within 0.5% of uniform temperature
             assert T_f_mean == pytest.approx(T_uniform, rel=0.005)
 
-    def test_wall_temperature_remains_uniform(
-        self, dynamic_from_steady_state
-    ):
+    def test_wall_temperature_remains_uniform(self, dynamic_from_steady_state):
         """Test wall temperature stays uniform throughout simulation."""
         model, _, T_uniform = dynamic_from_steady_state
 
@@ -1031,7 +1039,10 @@ class TestInitialSteadyState:
         )
 
         # Check solver succeeded
-        assert results.solver.termination_condition.name in ["optimal", "locallyOptimal"]
+        assert results.solver.termination_condition.name in [
+            "optimal",
+            "locallyOptimal",
+        ]
 
         # Get final temperatures
         T_f_final, T_p_final = get_final_temperatures(model)
@@ -1039,8 +1050,12 @@ class TestInitialSteadyState:
         # Since inputs are constant and we start from steady-state,
         # temperatures should not change significantly
         x_vals = sorted(model.x)
-        T_f_initial = np.array([value(model.T_f_init_param[x]) for x in x_vals])
-        T_p_initial = np.array([value(model.T_p_init_param[x]) for x in x_vals])
+        T_f_initial = np.array(
+            [value(model.T_f_init_param[x]) for x in x_vals]
+        )
+        T_p_initial = np.array(
+            [value(model.T_p_init_param[x]) for x in x_vals]
+        )
 
         # Final should be close to initial (within 2°C for a short simulation)
         assert np.allclose(T_f_final, T_f_initial, atol=2.0)
@@ -1083,7 +1098,10 @@ class TestInitialSteadyState:
             tee=False,
         )
 
-        assert results.solver.termination_condition.name in ["optimal", "locallyOptimal"]
+        assert results.solver.termination_condition.name in [
+            "optimal",
+            "locallyOptimal",
+        ]
 
         # Verify explicit ICs were used (check initial param values)
         x_vals = sorted(model.x)

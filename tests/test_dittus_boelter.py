@@ -5,6 +5,7 @@ Test script for Dittus-Boelter enhanced Pyomo models
 
 import pytest
 
+from solar_collector.fluid_properties import SYLTHERM800
 from solar_collector.heat_transfer import (
     calculate_heat_transfer_coefficient_nusselt,
     calculate_heat_transfer_coefficient_turbulent,
@@ -27,6 +28,8 @@ from solar_collector.solar_collector_dae_pyo_two_temp import (
 from solar_collector.solar_collector_dae_pyo_two_temp import (
     solve_model as solve_two_model,
 )
+
+ZERO_C = 273.15  # K
 
 
 def test_heat_transfer_coefficient_calculations():
@@ -66,7 +69,8 @@ def test_single_temperature_model():
     )
 
     # Add constraints
-    model = add_single_constraints(model)
+    T_initial = ZERO_C + 270.0
+    model = add_single_constraints(model, T_initial)
 
     # Solve
     results = solve_single_model(model, n_x=21, n_t=11, tol=1e-4)
@@ -83,13 +87,19 @@ def test_single_temperature_model():
 def test_two_temperature_model():
     """Test two temperature model with Dittus-Boelter correlation"""
     # Create model with Dittus-Boelter correlation
+    fluid_props = SYLTHERM800()
     model = create_two_temp_model(
+        fluid_props,
         t_final=60.0,  # Short simulation
-        use_dittus_boelter=True,
+        constant_heat_transfer_coeff=False,
     )
 
     # Add constraints
-    model = add_two_constraints(model)
+    T_f_initial = ZERO_C + 270.0
+    T_p_initial = ZERO_C + 210.0
+    model = add_two_constraints(
+        model, T_f_initial=T_f_initial, T_p_initial=T_p_initial
+    )
 
     # Solve
     results = solve_two_model(model, n_x=21, n_t=11, tol=1e-4)

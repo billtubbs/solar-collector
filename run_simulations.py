@@ -23,9 +23,6 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent / "src"))
-
 from simulate.inputs import (
     ConstantInput,
     InterpolatedInput,
@@ -115,13 +112,10 @@ def load_sim_spec(yaml_path: Path) -> dict:
         "initial_conditions",
         "inputs",
     ]
-    # Allow older format with 'run_simulation' instead of 'simulation'
-    if "run_simulation" in spec and "simulation" not in spec:
-        spec["simulation"] = spec.pop("run_simulation")
-        if "params" in spec["simulation"]:
-            # Flatten nested params
-            params = spec["simulation"].pop("params")
-            spec["simulation"].update(params)
+
+    for section in required_sections:
+        if section not in spec:
+            raise ValueError(f"Missing required section: {section}")
 
     return spec
 
@@ -170,7 +164,8 @@ def run_single_simulation(spec: dict, fluid_props) -> dict:
     # Create input functions
     input_funcs = create_input_functions(inputs_spec)
 
-    # Get initial mass flow rate for h_int calculation when using constant properties
+    # Get initial mass flow rate for h_int calculation when using constant
+    # properties
     mass_flow_rate_func = input_funcs.get("mass_flow_rate_func")
     initial_mass_flow_rate = (
         mass_flow_rate_func(0.0) if mass_flow_rate_func else None
@@ -204,12 +199,8 @@ def run_single_simulation(spec: dict, fluid_props) -> dict:
         T_f_initial = None
         T_p_initial = None
     else:
-        T_f_initial = ic_spec.get(
-            "T_f_initial", ic_spec.get("initial_fluid_temp", ZERO_C + 270.0)
-        )
-        T_p_initial = ic_spec.get(
-            "T_p_initial", ic_spec.get("initial_pipe_temp", ZERO_C + 210.0)
-        )
+        T_f_initial = ic_spec["T_f_initial"]
+        T_p_initial = ic_spec["T_p_initial"]
 
     # Run simulation
     print("Running simulation...")
@@ -269,7 +260,8 @@ def save_results(sim_result: dict, output_dir: Path, sim_name: str):
     T_p_df.to_csv(output_dir / f"{sim_name}_T_p.csv")
 
     # Time series data
-    # Use outlet_idx to get temperatures at collector outlet (x=L), not extended domain
+    # Use outlet_idx to get temperatures at collector outlet (x=L), not
+    # extended domain
     outlet_idx = data["outlet_idx"]
     ts_data = {
         "time_s": t_vals,
