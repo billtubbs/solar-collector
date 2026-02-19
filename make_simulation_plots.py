@@ -84,6 +84,8 @@ def load_simulation_results(results_dir: Path, sim_name: str) -> dict:
         "velocity_outlet": ts_df["velocity_outlet_m_s"].values,
         "irradiance": ts_df["irradiance_W_m2"].values,
         "T_inlet_K": ts_df["T_inlet_K"].values,
+        "T_f_mid_C": ts_df["T_f_mid_C"].values,
+        "T_p_mid_C": ts_df["T_p_mid_C"].values,
         "T_f_outlet_C": ts_df["T_f_outlet_C"].values,
         "T_p_outlet_C": ts_df["T_p_outlet_C"].values,
         "metadata": metadata,
@@ -94,7 +96,7 @@ def make_time_series_plot(
     data: dict,
     sim_name: str,
     colors: dict = None,
-    figsize: tuple = (10, 8),
+    figsize: tuple = (10, 10),
 ) -> plt.Figure:
     """
     Create time series plot from simulation data.
@@ -168,6 +170,22 @@ def make_time_series_plot(
             ],
             "ylabel": "Inlet Temp [°C]",
             "title": "Collector Inlet Temperatures",
+        },
+        {
+            "lines": [
+                {
+                    "y": data["T_f_mid_C"],
+                    "label": "Oil",
+                    "color": colors.get("T_f"),
+                },
+                {
+                    "y": data["T_p_mid_C"],
+                    "label": "Wall",
+                    "color": colors.get("T_p"),
+                },
+            ],
+            "ylabel": "Mid Temp [°C]",
+            "title": "Collector Midpoint Temperatures",
         },
         {
             "lines": [

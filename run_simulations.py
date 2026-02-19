@@ -20,6 +20,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -55,6 +56,29 @@ INPUT_NAME_MAP = {
     "irradiance": "irradiance_func",
     "solar_irradiance": "irradiance_func",
 }
+
+
+def load_array_data(value):
+    """Load data from a scalar, list, or file path.
+
+    Args:
+        value: A float/int scalar, a list of numeric values, or a
+            string file path to a CSV file containing array data.
+
+    Returns:
+        A float (scalar case), list (list case), or numpy array
+        (file case).
+    """
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return np.loadtxt(value, delimiter=",")
+    raise TypeError(
+        f"Expected a number, list, or file path string, "
+        f"got {type(value).__name__}"
+    )
 
 
 def parse_input_spec(input_spec: dict) -> callable:
@@ -154,30 +178,28 @@ def run_single_simulation(spec: dict, fluid_props) -> dict:
     inputs_spec = spec.get("inputs", {})
 
     # Get model creation parameters
-    create_params = model_spec.get(
-        "create_params", model_spec.get("params", {})
-    )
+    model_params = model_spec.get("model_params", model_spec.get("params", {}))
 
     # Handle t_final which might be in different places
-    t_final = create_params.pop("t_final", sim_spec.pop("t_final", 300.0))
+    t_final = model_params.pop("t_final", sim_spec.pop("t_final", 300.0))
 
     # Create input functions
     input_funcs = create_input_functions(inputs_spec)
 
     # Get initial mass flow rate for h_int calculation when using constant
     # properties
-    mass_flow_rate_func = input_funcs.get("mass_flow_rate_func")
-    initial_mass_flow_rate = (
-        mass_flow_rate_func(0.0) if mass_flow_rate_func else None
-    )
+    # TODO: Delete
+    # mass_flow_rate_func = input_funcs.get("mass_flow_rate_func")
+    # initial_mass_flow_rate = (
+    #     mass_flow_rate_func(0.0) if mass_flow_rate_func else None
+    # )
 
     # Create the model
     print("Creating model...")
     model = create_collector_model(
         fluid_props,
         t_final=t_final,
-        initial_mass_flow_rate=initial_mass_flow_rate,
-        **create_params,
+        **model_params,
     )
 
     # Get simulation parameters
@@ -199,8 +221,8 @@ def run_single_simulation(spec: dict, fluid_props) -> dict:
         T_f_initial = None
         T_p_initial = None
     else:
-        T_f_initial = ic_spec["T_f_initial"]
-        T_p_initial = ic_spec["T_p_initial"]
+        T_f_initial = load_array_data(ic_spec["T_f_initial"])
+        T_p_initial = load_array_data(ic_spec["T_p_initial"])
 
     # Run simulation
     print("Running simulation...")
@@ -260,8 +282,9 @@ def save_results(sim_result: dict, output_dir: Path, sim_name: str):
     T_p_df.to_csv(output_dir / f"{sim_name}_T_p.csv")
 
     # Time series data
-    # Use outlet_idx to get temperatures at collector outlet (x=L), not
-    # extended domain
+    # Use mid_idx and outlet_idx to get temperatures at collector
+    # midpoint (x=L/2) and outlet (x=L), not extended domain
+    mid_idx = data["mid_idx"]
     outlet_idx = data["outlet_idx"]
     ts_data = {
         "time_s": t_vals,
@@ -270,6 +293,8 @@ def save_results(sim_result: dict, output_dir: Path, sim_name: str):
         "velocity_outlet_m_s": data["v_outlet"],
         "irradiance_W_m2": data["I"],
         "T_inlet_K": data["T_inlet"],
+        "T_f_mid_C": data["T_f"][:, mid_idx] - ZERO_C,
+        "T_p_mid_C": data["T_p"][:, mid_idx] - ZERO_C,
         "T_f_outlet_C": data["T_f"][:, outlet_idx] - ZERO_C,
         "T_p_outlet_C": data["T_p"][:, outlet_idx] - ZERO_C,
     }

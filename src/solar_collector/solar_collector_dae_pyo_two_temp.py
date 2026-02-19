@@ -68,6 +68,8 @@ print_temp_profiles(model, ...)
     Prints temperature profiles and heat transfer analysis.
 """
 
+import warnings
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -123,6 +125,7 @@ def create_collector_model(
     irradiance_func=None,
     T_inlet_func=None,
     T_ref=ZERO_C + 300.0,
+    m_dot_ref=None,
     T_ambient=ZERO_C + 20.0,
     pipe_diameter=PIPE_DIAMETER,
     pipe_wall_thickness=PIPE_WALL_THICKNESS,
@@ -130,15 +133,16 @@ def create_collector_model(
     pipe_thermal_conductivity=PIPE_THERMAL_CONDUCTIVITY,
     pipe_density=PIPE_DENSITY,
     pipe_specific_heat=PIPE_SPECIFIC_HEAT,
+    pipe_wall_thermal_diffusivity=None,
+    heat_transfer_coeff_int=None,
     concentration_factor=CONCENTRATION_FACTOR,
     optical_efficiency=OPTICAL_EFFICIENCY,
+    axial_dispersion_coeff=AXIAL_DISPERSION_COEFF,
     constant_density=True,
     constant_viscosity=True,
     constant_thermal_conductivity=True,
     constant_specific_heat=True,
     constant_heat_transfer_coeff=True,
-    axial_dispersion_coeff=AXIAL_DISPERSION_COEFF,
-    initial_mass_flow_rate=None,
 ):
     """
     Create Pyomo model for pipe flow heat transport PDE with fluid and wall.
@@ -170,6 +174,12 @@ def create_collector_model(
         If None, uses default constant inlet temperature.
     T_ref : float, default=ZERO_C + 300.0
         Reference temperature [K] for evaluating constant properties.
+    m_dot_ref : float, optional
+        Reference mass flow rate [kg/s] used for calculating constant
+        h_int when constant_heat_transfer_coeff=True. If None, uses
+        the value from mass_flow_rate_func(0.0). This is important
+        when input functions are set later via run_simulation() rather
+        than at model creation time.
     T_ambient : float, default=ZERO_C + 20.0
         Ambient temperature [K] for convective heat loss.
     pipe_diameter : float, default=0.07
@@ -178,16 +188,29 @@ def create_collector_model(
         Pipe wall thickness d [m].
     heat_transfer_coeff_ext : float, default=20.0
         External heat transfer coefficient h_ext [W/m²·K] (pipe-to-ambient).
+    heat_transfer_coeff_int : float, optional
+        Internal heat transfer coefficient h_int [W/m²·K] (fluid-to-pipe).
+        If provided, this constant value is used directly instead of
+        computing h_int from the Dittus-Boelter correlation at T_ref.
+        Only used when constant_heat_transfer_coeff=True.
     pipe_thermal_conductivity : float, default=50.0
         Pipe wall thermal conductivity k_p [W/m·K].
     pipe_density : float, default=7850.0
         Pipe wall density ρ_p [kg/m³].
     pipe_specific_heat : float, default=450.0
         Pipe wall specific heat capacity cp_p [J/kg·K].
+    pipe_wall_thermal_diffusivity : float, optional
+        Pipe wall thermal diffusivity α_p [m²/s]. If provided, this
+        value is used directly instead of computing α_p = k_p/(ρ_p·cp_p).
     concentration_factor : float, default=26.0
         Solar concentration ratio c (mirror width / effective absorber width).
     optical_efficiency : float, default=0.8
         Optical efficiency ε accounting for mirror/alignment losses.
+    axial_dispersion_coeff : float, default=1e-4
+        Axial dispersion coefficient D_ax [m²/s] for turbulent mixing.
+        This characterizes the effective axial spreading of heat due to
+        turbulent eddies, typically 2-3 orders of magnitude larger than
+        molecular thermal diffusivity.
     constant_density : bool, default=True
         If True, use constant density evaluated at T_ref.
         If False, use temperature-dependent Expression.
@@ -204,11 +227,6 @@ def create_collector_model(
         If True, use constant h_int evaluated at T_ref using Dittus-Boelter.
         If False, use temperature-dependent h_int Expression based on local
         fluid properties at T_f[t, x] using Dittus-Boelter correlation.
-    axial_dispersion_coeff : float, default=1e-4
-        Axial dispersion coefficient D_ax [m²/s] for turbulent mixing.
-        This characterizes the effective axial spreading of heat due to
-        turbulent eddies, typically 2-3 orders of magnitude larger than
-        molecular thermal diffusivity.
     initial_mass_flow_rate : float, optional
         Initial mass flow rate [kg/s] used for calculating constant h_int
         when constant_heat_transfer_coeff=True. If None, uses the value from
@@ -333,6 +351,7 @@ def create_collector_model(
     model.rho_p = Param(initialize=pipe_density)  # [kg/m³]
     model.cp_p = Param(initialize=pipe_specific_heat)  # [J/kg·K]
     model.k_p = Param(initialize=pipe_thermal_conductivity)  # [W/m·K]
+    model._alpha_p = pipe_wall_thermal_diffusivity
 
     # Geometric parameters
     model.T_ambient = Param(initialize=T_ambient)  # [K]
@@ -404,11 +423,9 @@ def create_collector_model(
 
     # Calculate initial velocity from mass flow rate
     # Use initial_mass_flow_rate if provided, otherwise mass_flow_rate_func
-    if initial_mass_flow_rate is not None:
-        m_dot_initial = initial_mass_flow_rate
-    else:
-        m_dot_initial = mass_flow_rate_func(0.0)
-    v_initial = m_dot_initial / (rho_ref * pipe_area)
+    if m_dot_ref is None:
+        m_dot_ref = mass_flow_rate_func(0.0)
+    v_initial = m_dot_ref / (rho_ref * pipe_area)
 
     # Calculate h_int at T_ref for printing and constant case
     h_int_ref, Re_ref, Pr_ref, Nu_ref = (
@@ -422,21 +439,80 @@ def create_collector_model(
         )
     )
 
+    print(f"  Ambient temperature: {T_ambient - ZERO_C:.0f}°C")
+    print(f"  Reference fluid temperature: {T_ref - ZERO_C:.0f}°C")
+    print(f"  Reference mass flow rate: {m_dot_ref:.3f} kg/s")
+    print(f"  Reference velocity: {v_initial:.3f} m/s")
+    print(f"  h_ext (pipe-to-ambient): {heat_transfer_coeff_ext:.1f} W/m²·K")
+    print(f"  Axial dispersion coefficient: {axial_dispersion_coeff} m²/s")
     if constant_heat_transfer_coeff:
-        print("Using constant h_int (Dittus-Boelter at T_ref):")
+        if heat_transfer_coeff_int is not None:
+            print(
+                "  Constant h_int (user-provided): "
+                f"{heat_transfer_coeff_int:.1f} W/m²·K"
+            )
+        else:
+            print(f"  Reynolds number at T_ref: {Re_ref:.0f}")
+            print(f"  Prandtl number at T_ref: {Pr_ref:.1f}")
+            print(f"  Nusselt number at T_ref: {Nu_ref:.1f}")
+            print(
+                "  Constant h_int at T_ref (Dittus-Boelter): "
+                f"{h_int_ref:.1f} W/m²·K"
+            )
     else:
-        print("Using temperature-dependent h_int (Dittus-Boelter):")
-    print(f"  Reference temperature: {T_ref - ZERO_C:.0f}°C")
-    print(f"  Initial mass flow rate: {m_dot_initial:.3f} kg/s")
-    print(f"  Initial velocity: {v_initial:.3f} m/s")
-    print(f"  Reynolds number at T_ref: {Re_ref:.0f}")
-    print(f"  Prandtl number at T_ref: {Pr_ref:.1f}")
-    print(f"  Nusselt number at T_ref: {Nu_ref:.1f}")
-    print(f"  Heat transfer coefficient at T_ref: {h_int_ref:.1f} W/m²·K")
+        print("  Temperature-dependent h_int (Dittus-Boelter)")
+    if constant_density:
+        print(
+            f"  Constant density at T_ref: "
+            f"{fluid_props.density(T_ref):.2f} kg/m³"
+        )
+    else:
+        print("  Temperature-dependent density")
+    if constant_viscosity:
+        print(
+            f"  Constant viscosity at T_ref: "
+            f"{fluid_props.viscosity(T_ref):.6f} Pa·s"
+        )
+    else:
+        print("  Temperature-dependent viscosity")
+    if constant_thermal_conductivity:
+        print(
+            f"  Constant thermal conductivity at T_ref: "
+            f"{fluid_props.thermal_conductivity(T_ref):.4f} W/m·K"
+        )
+    else:
+        print("  Temperature-dependent thermal conductivity")
+    if constant_specific_heat:
+        print(
+            f"  Constant specific heat at T_ref: "
+            f"{fluid_props.heat_capacity(T_ref):.1f} J/kg·K"
+        )
+    else:
+        print("  Temperature-dependent specific heat")
+    if pipe_wall_thermal_diffusivity is not None:
+        print(
+            f"  Pipe wall thermal diffusivity "
+            f"(user-provided): "
+            f"{pipe_wall_thermal_diffusivity} m²/s"
+        )
+    else:
+        alpha_p_ref = pipe_thermal_conductivity / (
+            pipe_density * pipe_specific_heat
+        )
+        print(
+            f"  Pipe wall thermal diffusivity "
+            f"(from k_p, rho_p, cp_p): "
+            f"{alpha_p_ref:.2e} m²/s"
+        )
 
     # Internal heat transfer coefficient: constant or temperature-dependent
     if constant_heat_transfer_coeff:
-        model._h_int_const = Param(initialize=h_int_ref)
+        h_int_value = (
+            heat_transfer_coeff_int
+            if heat_transfer_coeff_int is not None
+            else h_int_ref
+        )
+        model._h_int_const = Param(initialize=h_int_value)
 
         @model.Expression(model.t, model.x)
         def h_int(m, t, x):
@@ -529,8 +605,10 @@ def add_pde_constraints(model, T_f_initial, T_p_initial):
     # Pipe wall temperature PDE constraint
     @model.Constraint(model.t, model.x)
     def wall_pde_constraint(m, t, x):
-        # Skip initial time
+        # Skip initial time and inlet boundary
         if t == 0:
+            return Constraint.Skip
+        if x == 0:
             return Constraint.Skip
 
         # Density * specific heat for pipe wall
@@ -578,8 +656,11 @@ def add_pde_constraints(model, T_f_initial, T_p_initial):
                 / (D_outer**2 - m.D**2)
             )
 
-            # Pipe thermal diffusivity: k_p / (ρ_p * cp_p)
-            alpha_p = m.k_p / (m.rho_p * m.cp_p)
+            # Pipe thermal diffusivity: α_p or k_p / (ρ_p * cp_p)
+            if m._alpha_p is not None:
+                alpha_p = m._alpha_p
+            else:
+                alpha_p = m.k_p / rho_cp
 
             # Wall PDE: (energy balance)
             #   ρcp ∂T_p/∂t = α_p ρcp ∂²T_p/∂x²
@@ -604,7 +685,10 @@ def add_pde_constraints(model, T_f_initial, T_p_initial):
                 * (m.T_p[t, x] - m.T_ambient)
                 / (D_outer**2 - m.D**2)
             )
-            alpha_p = m.k_p / rho_cp
+            if m._alpha_p is not None:
+                alpha_p = m._alpha_p
+            else:
+                alpha_p = m.k_p / rho_cp
 
             return rho_cp * m.dT_p_dt[t, x] == (
                 rho_cp * alpha_p * m.d2T_p_dx2[t, x]
@@ -721,6 +805,16 @@ def solve_model(
         x_outlet = x_vals[-1]
         x_before = x_vals[-2]
         return m.T_p[t, x_outlet] == m.T_p[t, x_before]
+
+    # Pipe wall inlet BC: zero gradient using grid values
+    x_vals_sorted = sorted(model.x)
+    x_first = x_vals_sorted[1]
+
+    @model.Constraint(model.t)
+    def wall_inlet_bc(m, t):
+        if t == 0:
+            return Constraint.Skip
+        return m.T_p[t, 0] == m.T_p[t, x_first]
 
     print(
         f"Discretized with {len(model.x)} x points and {len(model.t)} t points"
@@ -971,13 +1065,27 @@ def run_simulation(
     if T_inlet_func is not None:
         model.T_inlet_func = T_inlet_func
 
+    # Validate initial condition arguments
+    if not initial_steady_state:
+        if T_f_initial is None or T_p_initial is None:
+            raise ValueError(
+                "T_f_initial and T_p_initial must be provided "
+                "when initial_steady_state=False."
+            )
+    else:
+        if T_f_initial is not None:
+            warnings.warn(
+                "T_f_initial will be ignored because "
+                "initial_steady_state=True."
+            )
+        if T_p_initial is not None:
+            warnings.warn(
+                "T_p_initial will be ignored because "
+                "initial_steady_state=True."
+            )
+
     # Compute steady-state initial conditions if requested
-    if (
-        first_run
-        and initial_steady_state
-        and T_f_initial is None
-        and T_p_initial is None
-    ):
+    if first_run and initial_steady_state:
         T_f_initial, T_p_initial, _ = compute_steady_state_initial_conditions(
             model,
             n_x=n_x,
@@ -994,12 +1102,8 @@ def run_simulation(
 
         # Store initial conditions as mutable Params (will be created after
         # discretization when we know the x points)
-        model._T_f_initial_value = (
-            T_f_initial if T_f_initial is not None else ZERO_C + 270.0
-        )
-        model._T_p_initial_value = (
-            T_p_initial if T_p_initial is not None else ZERO_C + 210.0
-        )
+        model._T_f_initial_value = T_f_initial
+        model._T_p_initial_value = T_p_initial
 
         # Add PDE constraints (but NOT initial conditions yet - we'll add
         # those after discretization with mutable Params)
@@ -1069,6 +1173,15 @@ def run_simulation(
             x_outlet = x_vals[-1]
             x_before = x_vals[-2]
             return m.T_p[t, x_outlet] == m.T_p[t, x_before]
+
+        # Pipe wall inlet BC: zero gradient using grid values
+        x_first = x_vals[1]
+
+        @model.Constraint(model.t)
+        def wall_inlet_bc(m, t):
+            if t == 0:
+                return Constraint.Skip
+            return m.T_p[t, 0] == m.T_p[t, x_first]
 
         # Add objective
         model.obj = Objective(expr=1)
@@ -1169,6 +1282,8 @@ def _add_pde_constraints_no_ic(model):
     def wall_pde_constraint(m, t, x):
         if t == 0:
             return Constraint.Skip
+        if x == 0:
+            return Constraint.Skip
 
         rho_cp = m.rho_p * m.cp_p
 
@@ -1188,7 +1303,10 @@ def _add_pde_constraints_no_ic(model):
                 * (m.T_p[t, x] - m.T_ambient)
                 / (D_outer**2 - m.D**2)
             )
-            alpha_p = m.k_p / (m.rho_p * m.cp_p)
+            if m._alpha_p is not None:
+                alpha_p = m._alpha_p
+            else:
+                alpha_p = m.k_p / (m.rho_p * m.cp_p)
 
             return rho_cp * m.dT_p_dt[t, x] == (
                 rho_cp * alpha_p * m.d2T_p_dx2[t, x]
@@ -1208,7 +1326,10 @@ def _add_pde_constraints_no_ic(model):
                 * (m.T_p[t, x] - m.T_ambient)
                 / (D_outer**2 - m.D**2)
             )
-            alpha_p = m.k_p / rho_cp
+            if m._alpha_p is not None:
+                alpha_p = m._alpha_p
+            else:
+                alpha_p = m.k_p / rho_cp
 
             return rho_cp * m.dT_p_dt[t, x] == (
                 rho_cp * alpha_p * m.d2T_p_dx2[t, x]
@@ -2342,8 +2463,9 @@ def extract_model_data(model):
     t_vals = np.array(sorted(model.t))
     x_vals = np.array(sorted(model.x))
 
-    # Find collector outlet index (at x=L, not L_extended)
+    # Find collector midpoint and outlet indices
     L = float(pyo.environ.value(model.L))
+    mid_idx = int(np.argmin(np.abs(x_vals - L / 2)))
     outlet_idx = int(np.argmin(np.abs(x_vals - L)))
     x_outlet = x_vals[outlet_idx]
 
@@ -2380,6 +2502,7 @@ def extract_model_data(model):
         "I": I_vals,
         "T_inlet": T_inlet_vals,
         "L": L,
+        "mid_idx": mid_idx,
         "outlet_idx": outlet_idx,
         "m_dot": m_dot_vals,
     }

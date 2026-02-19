@@ -1,0 +1,54 @@
+metadata:
+  name: Axial dispersion test
+  description: Stationary fluid with no heat transfer to pipe or ambient
+
+system:
+  name: TCP-100 Collector
+  model:
+    module: solar_collector.solar_collector_dae_pyo_two_temp
+    params:
+      t_final: 3900.0  # 65 minutes
+      constant_density: true
+      constant_viscosity: true
+      constant_thermal_conductivity: true
+      constant_specific_heat: true
+      constant_heat_transfer_coeff: true
+      T_ambient: 298.15  # 25°C in Kelvin
+      heat_transfer_coeff_int: 0.0  # heat transfer between fluid and pipe
+      heat_transfer_coeff_ext: 0.0  # ambient losses
+      axial_dispersion_coeff: 1.0e-10  # axial heat diffusion
+      pipe_wall_thermal_diffusivity: 1.0e-10 # heat diffusion in pipe wall
+
+simulation:
+  n_x: 110
+  n_t: 130
+  solver:
+    max_iter: 1000
+    tol: 1.0e-6
+    print_level: 0
+    tee: false
+
+initial_conditions:
+  T_f_initial: "data/T_f_initial_110.csv"
+  T_p_initial: "data/T_p_initial_110.csv"
+
+inputs:
+  # Mass flow rate [kg/s]
+  mass_flow_rate:
+    ConstantInput:
+      value: 0.1
+
+  # Inlet temperature [K]
+  T_inlet:
+    ConstantInput:
+      value: 298.15
+    # SinusoidalInput:
+    #   amplitude: 150.0
+    #   frequency: 0.00125
+    #   offset: 448.15
+    #   phase: -1.5707963267948966
+
+  # Solar irradiance [W/m²]
+  irradiance:
+    ConstantInput:
+          value: 0.0
