@@ -20,8 +20,8 @@ system:
       pipe_wall_thermal_diffusivity: 1.0e-10 # heat diffusion in pipe wall
 
 simulation:
-  n_x: 110
-  n_t: 130
+  n_x: 330
+  n_t: 390
   solver:
     max_iter: 1000
     tol: 1.0e-6
@@ -29,24 +29,31 @@ simulation:
     tee: false
 
 initial_conditions:
-  T_f_initial: "data/T_f_initial_110.csv"
-  T_p_initial: "data/T_p_initial_110.csv"
+  T_f_initial:
+    SinusoidalInput:
+      amplitude: 150.0
+      frequency: 0.00125
+      offset: 448.15
+      phase: -1.5707963267948966
+  T_p_initial:
+    ConstantInput:
+      value: 298.15  # 25°C in Kelvin
 
 inputs:
   # Mass flow rate [kg/s]
   mass_flow_rate:
     ConstantInput:
-      value: 0.1
+      value: 0.516
 
   # Inlet temperature [K]
   T_inlet:
-    ConstantInput:
-      value: 298.15
-    # SinusoidalInput:
-    #   amplitude: 150.0
-    #   frequency: 0.00125
-    #   offset: 448.15
-    #   phase: -1.5707963267948966
+    # ConstantInput:
+    #   value: 298.15
+    SinusoidalInput:
+      amplitude: 150.0
+      frequency: 0.00125
+      offset: 448.15
+      phase: -1.5707963267948966
 
   # Solar irradiance [W/m²]
   irradiance:

@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from simulate.inputs import (
+from simulate.input_funcs import (
     ConstantInput,
     InterpolatedInput,
     RampInput,
@@ -59,15 +59,19 @@ INPUT_NAME_MAP = {
 
 
 def load_array_data(value):
-    """Load data from a scalar, list, or file path.
+    """Load data from a scalar, list, file path, or function spec.
 
     Args:
-        value: A float/int scalar, a list of numeric values, or a
-            string file path to a CSV file containing array data.
+        value: One of:
+            - A float/int scalar
+            - A list of numeric values
+            - A string file path to a CSV file containing array data
+            - A dict specifying an input function (e.g.,
+              ``{'InterpolatedInput': {'points': [...], 'values': [...]}}``),
+              in which case the parsed callable is returned.
 
     Returns:
-        A float (scalar case), list (list case), or numpy array
-        (file case).
+        A float, list, numpy array, or callable depending on input type.
     """
     if isinstance(value, (int, float)):
         return float(value)
@@ -75,8 +79,10 @@ def load_array_data(value):
         return value
     if isinstance(value, str):
         return np.loadtxt(value, delimiter=",")
+    if isinstance(value, dict):
+        return parse_input_spec(value)
     raise TypeError(
-        f"Expected a number, list, or file path string, "
+        f"Expected a number, list, file path string, or dict, "
         f"got {type(value).__name__}"
     )
 

@@ -6,7 +6,7 @@ system:
   name: TCP-100 Collector
   model:
     module: solar_collector.solar_collector_dae_pyo_two_temp
-    create_params:
+    params:
       t_final: 300.0  # 5 minutes
       constant_density: true
       constant_viscosity: true

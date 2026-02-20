@@ -20,13 +20,10 @@ from solar_collector.solar_collector_dae_pyo import (
     solve_model as solve_single_model,
 )
 from solar_collector.solar_collector_dae_pyo_two_temp import (
-    add_pde_constraints as add_two_constraints,
-)
-from solar_collector.solar_collector_dae_pyo_two_temp import (
     create_collector_model as create_two_temp_model,
 )
 from solar_collector.solar_collector_dae_pyo_two_temp import (
-    solve_model as solve_two_model,
+    run_simulation as run_two_simulation,
 )
 
 ZERO_C = 273.15  # K
@@ -94,15 +91,17 @@ def test_two_temperature_model():
         constant_heat_transfer_coeff=False,
     )
 
-    # Add constraints
+    # Run simulation
     T_f_initial = ZERO_C + 270.0
     T_p_initial = ZERO_C + 210.0
-    model = add_two_constraints(
-        model, T_f_initial=T_f_initial, T_p_initial=T_p_initial
+    results = run_two_simulation(
+        model,
+        T_f_initial=T_f_initial,
+        T_p_initial=T_p_initial,
+        n_x=21,
+        n_t=11,
+        tol=1e-4,
     )
-
-    # Solve
-    results = solve_two_model(model, n_x=21, n_t=11, tol=1e-4)
 
     # Check solver status
     assert str(results.solver.status) == "ok", (

@@ -1223,22 +1223,29 @@ class FluidProperties:
             # Get experimental data
             exp_data = np.array(property_data[prop_key])
 
-            # Get correlation predictions
-            pred_data = self.correlations[prop_key].evaluate(T_data)
+            # Clip to correlation's valid temperature range
+            T_min_corr, T_max_corr = self.correlations[prop_key].get_valid_range()
+            valid_mask = (T_data >= T_min_corr) & (T_data <= T_max_corr)
+            T_valid = T_data[valid_mask]
+            T_C_valid = T_valid - 273.15
+            exp_valid = exp_data[valid_mask]
+
+            # Get correlation predictions within valid range
+            pred_data = self.correlations[prop_key].evaluate(T_valid)
 
             # Calculate statistics
-            residuals = exp_data - pred_data
+            residuals = exp_valid - pred_data
             rmse = np.sqrt(np.mean(residuals**2))
             mae = np.mean(np.abs(residuals))
             mape = (
-                np.mean(np.abs(residuals / exp_data)) * 100
-                if np.all(exp_data != 0)
+                np.mean(np.abs(residuals / exp_valid)) * 100
+                if np.all(exp_valid != 0)
                 else float("inf")
             )
 
             # R-squared
             ss_res = np.sum(residuals**2)
-            ss_tot = np.sum((exp_data - np.mean(exp_data)) ** 2)
+            ss_tot = np.sum((exp_valid - np.mean(exp_valid)) ** 2)
             r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else float("-inf")
 
             results[prop_key] = {
@@ -1258,14 +1265,14 @@ class FluidProperties:
                 ax1 = axes[row, col * 2]
                 ax2 = axes[row, col * 2 + 1]
 
-            # Plot 1: Data vs Correlation
-            T_plot = np.linspace(T_data.min(), T_data.max(), 100)
+            # Plot 1: Data vs Correlation (within valid range only)
+            T_plot = np.linspace(T_min_corr, T_max_corr, 100)
             T_C_plot = T_plot - 273.15
             pred_plot = self.correlations[prop_key].evaluate(T_plot)
 
             ax1.plot(
-                T_C_data,
-                exp_data,
+                T_C_valid,
+                exp_valid,
                 "bo",
                 label="Data",
                 markersize=6,
@@ -1294,7 +1301,7 @@ class FluidProperties:
             )
 
             # Plot 2: Residuals
-            ax2.plot(T_C_data, residuals, "go", markersize=6, alpha=0.7)
+            ax2.plot(T_C_valid, residuals, "go", markersize=6, alpha=0.7)
             ax2.axhline(y=0, color="k", linestyle="--", linewidth=1)
             ax2.set_xlabel("Temperature [°C]")
             ax2.set_ylabel(f"Residual [{prop_units}]")

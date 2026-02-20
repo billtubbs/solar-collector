@@ -14,7 +14,7 @@ from solar_collector.fluid_properties import SYLTHERM800
 from solar_collector.solar_collector_dae_pyo_two_temp import (
     AXIAL_DISPERSION_COEFF,
     COLLECTOR_LENGTH,
-    PIPE_DIAMETER,
+    PIPE_DIAMETER_INT,
     PIPE_WALL_THICKNESS,
     ZERO_C,
     add_pde_constraints,
@@ -24,7 +24,6 @@ from solar_collector.solar_collector_dae_pyo_two_temp import (
     create_collector_model_steady_state,
     get_final_temperatures,
     run_simulation,
-    solve_model,
     solve_steady_state_model,
 )
 
@@ -129,12 +128,12 @@ class TestCreatePipeFlowModelConstantProperties:
 
     def test_geometric_parameters(self, model_constant):
         """Test geometric parameters have correct values."""
-        assert value(model_constant.D) == pytest.approx(PIPE_DIAMETER)
+        assert value(model_constant.D) == pytest.approx(PIPE_DIAMETER_INT)
         assert value(model_constant.d) == pytest.approx(PIPE_WALL_THICKNESS)
         assert value(model_constant.L) == pytest.approx(COLLECTOR_LENGTH)
 
         # Cross-sectional area
-        expected_A = np.pi * PIPE_DIAMETER**2 / 4.0
+        expected_A = np.pi * PIPE_DIAMETER_INT**2 / 4.0
         assert value(model_constant.A) == pytest.approx(expected_A)
 
     def test_pipe_properties(self, model_constant):
@@ -294,9 +293,8 @@ class TestAddPdeConstraintsConstantProperties:
             constant_specific_heat=True,
             constant_heat_transfer_coeff=True,
         )
-        return add_pde_constraints(
-            model, T_f_initial=ZERO_C + 270.0, T_p_initial=ZERO_C + 210.0
-        )
+        add_pde_constraints(model)
+        return model
 
     def test_fluid_pde_constraint_exists(self, model_with_constraints):
         """Test that fluid PDE constraint is added."""
@@ -306,21 +304,9 @@ class TestAddPdeConstraintsConstantProperties:
         """Test that wall PDE constraint is added."""
         assert hasattr(model_with_constraints, "wall_pde_constraint")
 
-    def test_fluid_initial_condition_exists(self, model_with_constraints):
-        """Test that fluid initial condition constraint is added."""
-        assert hasattr(model_with_constraints, "fluid_initial_condition")
-
-    def test_wall_initial_condition_exists(self, model_with_constraints):
-        """Test that wall initial condition constraint is added."""
-        assert hasattr(model_with_constraints, "wall_initial_condition")
-
     def test_inlet_boundary_condition_exists(self, model_with_constraints):
         """Test that inlet boundary condition is added."""
         assert hasattr(model_with_constraints, "inlet_bc")
-
-    def test_objective_exists(self, model_with_constraints):
-        """Test that objective function is added."""
-        assert hasattr(model_with_constraints, "obj")
 
 
 class TestAddPdeConstraintsTemperatureDependent:
@@ -339,9 +325,8 @@ class TestAddPdeConstraintsTemperatureDependent:
             constant_specific_heat=False,
             constant_heat_transfer_coeff=False,
         )
-        return add_pde_constraints(
-            model, T_f_initial=ZERO_C + 270.0, T_p_initial=ZERO_C + 210.0
-        )
+        add_pde_constraints(model)
+        return model
 
     def test_fluid_pde_constraint_exists(
         self, model_with_constraints_temp_dep
@@ -353,35 +338,15 @@ class TestAddPdeConstraintsTemperatureDependent:
         """Test that wall PDE constraint is added."""
         assert hasattr(model_with_constraints_temp_dep, "wall_pde_constraint")
 
-    def test_fluid_initial_condition_exists(
-        self, model_with_constraints_temp_dep
-    ):
-        """Test that fluid initial condition constraint is added."""
-        assert hasattr(
-            model_with_constraints_temp_dep, "fluid_initial_condition"
-        )
-
-    def test_wall_initial_condition_exists(
-        self, model_with_constraints_temp_dep
-    ):
-        """Test that wall initial condition constraint is added."""
-        assert hasattr(
-            model_with_constraints_temp_dep, "wall_initial_condition"
-        )
-
     def test_inlet_boundary_condition_exists(
         self, model_with_constraints_temp_dep
     ):
         """Test that inlet boundary condition is added."""
         assert hasattr(model_with_constraints_temp_dep, "inlet_bc")
 
-    def test_objective_exists(self, model_with_constraints_temp_dep):
-        """Test that objective function is added."""
-        assert hasattr(model_with_constraints_temp_dep, "obj")
 
-
-class TestSolveModelZeroIrradiance:
-    """Tests for solve_model with zero solar irradiance.
+class TestRunSimulationZeroIrradiance:
+    """Tests for run_simulation with zero solar irradiance.
 
     With I(t) = 0 and uniform initial conditions matching T_inlet = T_amb,
     the system should maintain thermal equilibrium.
@@ -424,16 +389,11 @@ class TestSolveModelZeroIrradiance:
             constant_heat_transfer_coeff=True,
         )
 
-        # Add constraints with uniform initial conditions
-        model = add_pde_constraints(
+        # Run simulation with uniform initial conditions
+        results = run_simulation(
             model,
             T_f_initial=T_uniform,
             T_p_initial=T_uniform,
-        )
-
-        # Solve with reduced output
-        results = solve_model(
-            model,
             n_x=20,
             n_t=10,
             print_level=0,
@@ -790,16 +750,11 @@ class TestDynamicMatchesSteadyState:
             constant_heat_transfer_coeff=True,
         )
 
-        # Add constraints with uniform initial conditions (from steady-state)
-        dynamic_model = add_pde_constraints(
+        # Run simulation with uniform initial conditions (from steady-state)
+        results = run_simulation(
             dynamic_model,
             T_f_initial=T_uniform,
             T_p_initial=T_uniform,
-        )
-
-        # Solve dynamic model
-        results = solve_model(
-            dynamic_model,
             n_x=50,
             n_t=20,
             print_level=0,
@@ -927,7 +882,7 @@ class TestDynamicWarmInletSteadyState:
     def test_steady_state_heat_loss(
         self, steady_state_warm, warm_inlet_conditions
     ):
-        """Verify temperature drop is reasonable for the heat loss conditions."""
+        """Verify temperature drop for the heat loss conditions."""
         _, _, (T_f_profile, _, _) = steady_state_warm
         cond = warm_inlet_conditions
 
@@ -937,8 +892,7 @@ class TestDynamicWarmInletSteadyState:
 
         # Temperature should drop due to heat loss, but not dramatically
         # (high mass flow rate limits the cooling)
-        assert delta_T > 0  # Temperature decreases
-        assert delta_T < 50  # But not by more than 50°C
+        assert np.isclose(delta_T, 95.0, atol=0.5)
 
 
 class TestInitialSteadyState:
@@ -976,7 +930,7 @@ class TestInitialSteadyState:
             constant_thermal_conductivity=True,
             constant_specific_heat=True,
             constant_heat_transfer_coeff=True,
-            initial_mass_flow_rate=cond["mass_flow_rate"],
+            m_dot_ref=cond["mass_flow_rate"],
         )
 
         # Set input functions
@@ -1022,7 +976,7 @@ class TestInitialSteadyState:
             constant_thermal_conductivity=True,
             constant_specific_heat=True,
             constant_heat_transfer_coeff=True,
-            initial_mass_flow_rate=cond["mass_flow_rate"],
+            m_dot_ref=cond["mass_flow_rate"],
         )
 
         # Run simulation with steady-state initialization
@@ -1061,13 +1015,16 @@ class TestInitialSteadyState:
         assert np.allclose(T_f_final, T_f_initial, atol=2.0)
         assert np.allclose(T_p_final, T_p_initial, atol=2.0)
 
-    def test_initial_steady_state_not_used_when_explicit_ic_given(
+    def test_explicit_ics_ignored_when_initial_steady_state_true(
         self, fluid_props, test_conditions
     ):
-        """Test that initial_steady_state is ignored when explicit ICs given."""
+        """Test that explicit ICs are ignored when initial_steady_state=True.
+
+        initial_steady_state takes precedence: explicit T_f_initial/T_p_initial
+        are ignored and the steady-state solution is used instead.
+        """
         cond = test_conditions
 
-        # Pass initial_mass_flow_rate so h_int is calculated correctly
         model = create_collector_model(
             fluid_props,
             t_final=60.0,
@@ -1077,34 +1034,36 @@ class TestInitialSteadyState:
             constant_thermal_conductivity=True,
             constant_specific_heat=True,
             constant_heat_transfer_coeff=True,
-            initial_mass_flow_rate=cond["mass_flow_rate"],
+            m_dot_ref=cond["mass_flow_rate"],
         )
 
         T_f_explicit = ZERO_C + 300.0  # Different from steady-state
         T_p_explicit = ZERO_C + 280.0
 
-        # Run with both initial_steady_state=True and explicit ICs
-        results = run_simulation(
-            model,
-            mass_flow_rate_func=lambda t: cond["mass_flow_rate"],
-            irradiance_func=lambda t: cond["DNI"],
-            T_inlet_func=lambda t: ZERO_C + cond["T_inlet_C"],
-            T_f_initial=T_f_explicit,
-            T_p_initial=T_p_explicit,
-            initial_steady_state=True,  # Should be ignored
-            n_x=20,
-            n_t=5,
-            print_level=0,
-            tee=False,
-        )
+        # Run with initial_steady_state=True; explicit ICs should be ignored.
+        # Warnings are expected because explicit ICs are provided but ignored.
+        with pytest.warns(UserWarning, match="will be ignored"):
+            results = run_simulation(
+                model,
+                mass_flow_rate_func=lambda t: cond["mass_flow_rate"],
+                irradiance_func=lambda t: cond["DNI"],
+                T_inlet_func=lambda t: ZERO_C + cond["T_inlet_C"],
+                T_f_initial=T_f_explicit,
+                T_p_initial=T_p_explicit,
+                initial_steady_state=True,
+                n_x=20,
+                n_t=5,
+                print_level=0,
+                tee=False,
+            )
 
         assert results.solver.termination_condition.name in [
             "optimal",
             "locallyOptimal",
         ]
 
-        # Verify explicit ICs were used (check initial param values)
+        # Verify steady-state ICs were used, not the explicit values
         x_vals = sorted(model.x)
         for x in x_vals:
-            assert abs(value(model.T_f_init_param[x]) - T_f_explicit) < 0.01
-            assert abs(value(model.T_p_init_param[x]) - T_p_explicit) < 0.01
+            assert abs(value(model.T_f_init_param[x]) - T_f_explicit) > 1.0
+            assert abs(value(model.T_p_init_param[x]) - T_p_explicit) > 1.0

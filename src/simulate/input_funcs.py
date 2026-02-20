@@ -1,16 +1,18 @@
-"""Input signal classes for time-varying system inputs.
+"""Callable function classes for defining input signals and profiles.
 
-This module provides various input signal types that can be used
-to drive dynamical systems during simulation.
+This module provides various callable function types that can be used
+to define signals as a function of any independent variable (e.g.,
+time, position, or other coordinates).
 
 Notes
 -----
-Input signals are evaluated by the SimulationEngine at discrete time
-points and passed as constants to the integrator for each time step.
-This means inputs are piecewise constant between time steps.
+When used with SimulationEngine, these functions are evaluated at
+discrete time points and passed as constants to the integrator for
+each time step, making inputs piecewise constant between time steps.
 
-For true time-varying inputs within integration steps, users should
-implement custom integrators specific to their framework.
+These classes can also be used independently to define spatial
+profiles (e.g., initial temperature distributions as a function
+of position) or any other function of a single variable.
 """
 
 from typing import Any, Callable, Union
@@ -19,9 +21,9 @@ import numpy as np
 
 
 class ConstantInput:
-    """Constant input signal.
+    """Constant-valued function.
 
-    Returns the same value at all times.
+    Returns the same value for all inputs.
 
     Parameters
     ----------
@@ -40,7 +42,7 @@ class ConstantInput:
     def __init__(self, value: Any):
         self.value = value
 
-    def __call__(self, t: float) -> Any:
+    def __call__(self, x: float) -> Any:
         """Return constant value."""
         return self.value
 
@@ -49,16 +51,16 @@ class ConstantInput:
 
 
 class StepInput:
-    """Step input signal with piecewise constant values.
+    """Piecewise constant (step) function.
 
-    The input changes value at specified times.
+    The output changes value at specified breakpoints.
 
     Parameters
     ----------
     times : array-like
-        Times at which the input changes value
+        Breakpoints at which the value changes.
     values : array-like
-        Values corresponding to each time interval.
+        Values for each interval.
         Length should be len(times) + 1 or len(times).
 
     Examples
@@ -94,9 +96,9 @@ class StepInput:
                 f"{len(self.times) + 1}, got {len(self.values)}"
             )
 
-    def __call__(self, t: float) -> Any:
-        """Return value at time t."""
-        idx = np.searchsorted(self.times, t, side="right")
+    def __call__(self, x: float) -> Any:
+        """Return value at x."""
+        idx = np.searchsorted(self.times, x, side="right")
         return self.values[min(idx, len(self.values) - 1)]
 
     def __repr__(self):
@@ -107,14 +109,14 @@ class StepInput:
 
 
 class RampInput:
-    """Ramp input that changes linearly with time.
+    """Linear ramp function.
 
     Parameters
     ----------
     rate : float
-        Rate of change (slope)
+        Rate of change (slope).
     offset : float, optional
-        Initial value at t=0, by default 0.0
+        Value at the origin, by default 0.0.
 
     Examples
     --------
@@ -131,33 +133,33 @@ class RampInput:
         self.rate = rate
         self.offset = offset
 
-    def __call__(self, t: float) -> float:
-        """Return ramp value at time t."""
-        return self.offset + self.rate * t
+    def __call__(self, x: float) -> float:
+        """Return ramp value at x."""
+        return self.offset + self.rate * x
 
     def __repr__(self):
         return f"RampInput(rate={self.rate}, offset={self.offset})"
 
 
 class InterpolatedInput:
-    """Linearly interpolated input from tabulated data.
+    """Interpolated function from tabulated data points.
 
     Parameters
     ----------
-    times : array-like
-        Time points for interpolation
+    points : array-like
+        Independent variable values (e.g., time or position).
     values : array-like
-        Values at each time point
+        Dependent variable values at each point.
     kind : str, optional
-        Interpolation kind ('linear', 'cubic', etc.), by default 'linear'
+        Interpolation kind ('linear', 'cubic', etc.), by default 'linear'.
     fill_value : str or float, optional
-        How to handle extrapolation, by default 'extrapolate'
+        How to handle extrapolation, by default 'extrapolate'.
 
     Examples
     --------
-    >>> times = [0.0, 1.0, 2.0, 3.0]
+    >>> points = [0.0, 1.0, 2.0, 3.0]
     >>> values = [0.0, 1.0, 0.5, 0.0]
-    >>> u = InterpolatedInput(times, values)
+    >>> u = InterpolatedInput(points, values)
     >>> u(0.5)  # Linear interpolation
     0.5
     >>> u(1.5)
@@ -166,14 +168,24 @@ class InterpolatedInput:
 
     def __init__(
         self,
-        times: Union[list, np.ndarray],
-        values: Union[list, np.ndarray],
+        points: Union[list, np.ndarray] = None,
+        values: Union[list, np.ndarray] = None,
         kind: str = "linear",
         fill_value: Union[str, float] = "extrapolate",
+        *,
+        times: Union[list, np.ndarray] = None,
     ):
         from scipy.interpolate import interp1d
 
-        self.times = np.asarray(times)
+        # Support 'times' as alias for backwards compatibility
+        if points is None and times is not None:
+            points = times
+        elif points is None:
+            raise TypeError(
+                "InterpolatedInput requires 'points' (or 'times')"
+            )
+
+        self.times = np.asarray(points)
         self.values = np.asarray(values)
         self.kind = kind
 
@@ -181,9 +193,9 @@ class InterpolatedInput:
             self.times, self.values, kind=kind, fill_value=fill_value
         )
 
-    def __call__(self, t: float) -> Any:
-        """Return interpolated value at time t."""
-        return float(self.interp(t))
+    def __call__(self, x: float) -> Any:
+        """Return interpolated value at x."""
+        return float(self.interp(x))
 
     def __repr__(self):
         return (
@@ -193,9 +205,9 @@ class InterpolatedInput:
 
 
 class SinusoidalInput:
-    """Sinusoidal input signal.
+    """Sinusoidal function.
 
-    u(t) = amplitude * sin(2*pi*frequency*t + phase) + offset
+    f(x) = amplitude * sin(2*pi*frequency*x + phase) + offset
 
     Parameters
     ----------
@@ -229,11 +241,11 @@ class SinusoidalInput:
         self.phase = phase
         self.offset = offset
 
-    def __call__(self, t: float) -> float:
-        """Return sinusoidal value at time t."""
+    def __call__(self, x: float) -> float:
+        """Return sinusoidal value at x."""
         return (
             self.amplitude
-            * np.sin(2 * np.pi * self.frequency * t + self.phase)
+            * np.sin(2 * np.pi * self.frequency * x + self.phase)
             + self.offset
         )
 
@@ -246,14 +258,14 @@ class SinusoidalInput:
 
 
 class FunctionInput:
-    """Custom function-based input.
+    """Custom function wrapper.
 
-    Wraps any callable as an input signal.
+    Wraps any callable as an input function.
 
     Parameters
     ----------
     func : callable
-        Function that takes time t and returns input value
+        Function that takes a single argument and returns a value.
 
     Examples
     --------
@@ -280,9 +292,9 @@ class FunctionInput:
     def __init__(self, func: Callable[[float], Any]):
         self.func = func
 
-    def __call__(self, t: float) -> Any:
-        """Return function value at time t."""
-        return self.func(t)
+    def __call__(self, x: float) -> Any:
+        """Return function value at x."""
+        return self.func(x)
 
     def __repr__(self):
         func_name = getattr(self.func, "__name__", repr(self.func))
@@ -322,9 +334,9 @@ class CompositeInput:
         self.signals = signals
         self.operation = operation or sum
 
-    def __call__(self, t: float) -> Any:
-        """Return combined value at time t."""
-        values = [sig(t) for sig in self.signals]
+    def __call__(self, x: float) -> Any:
+        """Return combined value at x."""
+        values = [sig(x) for sig in self.signals]
         return self.operation(values)
 
     def __repr__(self):

@@ -13,12 +13,10 @@ create_collector_model(...) -> ConcreteModel
     variables, derivative variables, physical parameters, and time-varying
     input parameters (v, I, T_inlet). Optionally uses Dittus-Boelter for h_int.
 
-add_pde_constraints(model, T_f_initial, T_p_initial) -> ConcreteModel
-    Adds coupled PDE constraints for fluid and wall, initial conditions,
-    and boundary conditions.
-
-solve_model(model, ...) -> Results
-    Applies finite difference discretization and solves with IPOPT.
+add_pde_constraints(model) -> ConcreteModel
+    Adds coupled PDE constraints for fluid and wall, and inlet boundary
+    condition. Initial conditions are added by run_simulation() after
+    discretization using mutable Params.
 
 run_simulation(model, ...) -> Results
     Run a simulation with support for sequential runs. On first call,
@@ -102,9 +100,9 @@ FLUID_SPECIFIC_HEAT = 2086.0  # J/kg·K
 AXIAL_DISPERSION_COEFF = 1e-4  # m²/s (turbulent axial dispersion)
 HEAT_TRANSFER_COEFF_INT = 10.0  # W/m²·K (internal, pipe-to-fluid)
 HEAT_TRANSFER_COEFF_EXT = 20.0  # W/m²·K (external, pipe-to-ambient)
-PIPE_DIAMETER = 0.07  # m
-PIPE_WALL_THICKNESS = 0.006  # m
-COLLECTOR_LENGTH = 96.0  # m
+PIPE_WALL_THICKNESS = 0.002  # m
+PIPE_DIAMETER_INT = 0.07 - PIPE_WALL_THICKNESS * 2  # m
+COLLECTOR_LENGTH = 2 * 96.0  # m
 PIPE_THERMAL_CONDUCTIVITY = 50.0  # W/m·K (typical for steel)
 PIPE_DENSITY = 7850.0  # kg/m³ (steel)
 PIPE_SPECIFIC_HEAT = 450.0  # J/kg·K (steel)
@@ -127,7 +125,7 @@ def create_collector_model(
     T_ref=ZERO_C + 300.0,
     m_dot_ref=None,
     T_ambient=ZERO_C + 20.0,
-    pipe_diameter=PIPE_DIAMETER,
+    pipe_diameter_int=PIPE_DIAMETER_INT,
     pipe_wall_thickness=PIPE_WALL_THICKNESS,
     heat_transfer_coeff_ext=HEAT_TRANSFER_COEFF_EXT,
     pipe_thermal_conductivity=PIPE_THERMAL_CONDUCTIVITY,
@@ -182,7 +180,7 @@ def create_collector_model(
         than at model creation time.
     T_ambient : float, default=ZERO_C + 20.0
         Ambient temperature [K] for convective heat loss.
-    pipe_diameter : float, default=0.07
+    pipe_diameter_int : float, default=0.07
         Inner pipe diameter D [m].
     pipe_wall_thickness : float, default=0.006
         Pipe wall thickness d [m].
@@ -355,12 +353,12 @@ def create_collector_model(
 
     # Geometric parameters
     model.T_ambient = Param(initialize=T_ambient)  # [K]
-    model.D = Param(initialize=pipe_diameter)  # [m]
+    model.D = Param(initialize=pipe_diameter_int)  # [m]
     model.d = Param(initialize=pipe_wall_thickness)  # [m]
     model.h_ext = Param(initialize=heat_transfer_coeff_ext)  # [W/m²·K]
 
     # Pipe cross-sectional area for mass flow rate to velocity conversion
-    pipe_area = np.pi * pipe_diameter**2 / 4.0
+    pipe_area = np.pi * pipe_diameter_int**2 / 4.0
     model.A = Param(initialize=pipe_area)  # [m²]
 
     # Reference density for velocity calculation (constant)
@@ -431,7 +429,7 @@ def create_collector_model(
     h_int_ref, Re_ref, Pr_ref, Nu_ref = (
         calculate_heat_transfer_coefficient_turbulent(
             v_initial,
-            pipe_diameter,
+            pipe_diameter_int,
             rho_ref,
             eta_ref,
             lam_ref,
@@ -543,313 +541,6 @@ def create_collector_model(
             return Nu * k / D
 
     return model
-
-
-def add_pde_constraints(model, T_f_initial, T_p_initial):
-    """
-    Add PDE constraints and boundary/initial conditions for both temperatures.
-
-    Parameters
-    ----------
-    model : pyomo.ConcreteModel
-        The Pyomo model created by create_collector_model().
-    T_f_initial : float or array-like
-        Initial fluid temperature [K] at t=0. If float, uniform temperature
-        for all x > 0. If array, must match the number of x points after
-        discretization (values are mapped to x positions in order).
-    T_p_initial : float or array-like
-        Initial pipe wall temperature [K] at t=0. If float, uniform
-        temperature for all x. If array, must match the number of x points.
-
-    Returns
-    -------
-    model : pyomo.ConcreteModel
-        The model with PDE constraints, initial conditions, and boundary
-        conditions added.
-    """
-    # Store initial conditions on model for use in constraints
-    model.T_f_initial = T_f_initial
-    model.T_p_initial = T_p_initial
-
-    # Fluid temperature PDE constraint
-    @model.Constraint(model.t, model.x)
-    def fluid_pde_constraint(m, t, x):
-        # Skip initial time
-        if t == 0:
-            return Constraint.Skip
-        if x == 0:  # Skip inlet
-            return Constraint.Skip
-
-        # Heat transfer from pipe wall to fluid per unit volume [W/m³]
-        # Heat transfer area per unit length: π * D [m²/m]
-        # Heat transfer per unit length:
-        #   h_int * π * D * (T_p - T_f) [W/m]
-        # Heat transfer per unit volume:
-        #   h_int * π * D * (T_p - T_f) / (π * D² / 4)
-        # Simplified:
-        #   h_int * 4 * (T_p - T_f) / D [W/m³]
-        heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
-
-        # Fluid PDE: (energy balance)
-        #   ρcp ∂T_f/∂t + ρcp v(t,x)∂T_f/∂x = ρcp D_eff ∂²T_f/∂x² + q_to_fluid
-        # Note: v(t,x) = m_dot(t) / (rho_f(t,x) * A) to conserve mass
-        # D_eff = D_ax + v*dx/2 adds upwind artificial diffusion to suppress
-        # oscillations from central differencing at high Peclet numbers.
-        rho_cp = m.rho_f[t, x] * m.cp_f[t, x]
-        D_eff = m.D_ax + m.v[t, x] * m.dx / 2
-        return (
-            rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t, x] * m.dT_f_dx[t, x]
-            == rho_cp * D_eff * m.d2T_f_dx2[t, x] + heat_to_fluid
-        )
-
-    # Pipe wall temperature PDE constraint
-    @model.Constraint(model.t, model.x)
-    def wall_pde_constraint(m, t, x):
-        # Skip initial time and inlet boundary
-        if t == 0:
-            return Constraint.Skip
-        if x == 0:
-            return Constraint.Skip
-
-        # Density * specific heat for pipe wall
-        rho_cp = m.rho_p * m.cp_p
-
-        # For nominal physical pipe (0 < x <= L): include heat input
-        if x <= m.L:
-            # Solar heat input based on Yebra & Rhinehart model:
-            # q_eff = I * c * ε / 2 [W/m²]
-            # where:
-            #   I = natural solar irradiance [W/m²]
-            #   c = concentration factor (mirror width / absorber width)
-            #   ε = optical efficiency (mirror/alignment losses)
-            #   /2 = accounts for 180° illumination of pipe surface
-            q_eff = m.I[t] * m.c * m.epsilon / 2.0
-
-            # Heat input to pipe wall per unit volume [W/m³]
-            # Outer diameter: D + 2*d
-            # Heat input per unit length: q_eff * π * (D + 2*d) [W/m]
-            # Pipe wall volume per unit length:
-            #   π * ((D+2*d)² - D²) / 4 [m³/m]
-            # Simplified:
-            #   q_eff * 4 * (D + 2*d) / ((D+2*d)² - D²) [W/m³]
-            D_outer = m.D + 2 * m.d
-            heat_input_volumetric = (
-                q_eff * 4.0 * D_outer / (D_outer**2 - m.D**2)
-            )
-
-            # Heat transfer to fluid per unit volume [W/m³]
-            heat_to_fluid = (
-                m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
-            )
-
-            # Heat loss to ambient per unit volume [W/m³]
-            # Heat loss per unit length:
-            #   h_ext * π * (D + 2*d) * (T_p - T_ambient) [W/m]
-            # Heat loss per unit volume:
-            #   h_ext * π * (D + 2*d) * (T_p - T_ambient) /
-            #   wall_volume_per_length
-            heat_loss_volumetric = (
-                m.h_ext
-                * 4.0
-                * D_outer
-                * (m.T_p[t, x] - m.T_ambient)
-                / (D_outer**2 - m.D**2)
-            )
-
-            # Pipe thermal diffusivity: α_p or k_p / (ρ_p * cp_p)
-            if m._alpha_p is not None:
-                alpha_p = m._alpha_p
-            else:
-                alpha_p = m.k_p / rho_cp
-
-            # Wall PDE: (energy balance)
-            #   ρcp ∂T_p/∂t = α_p ρcp ∂²T_p/∂x²
-            #      + q_input - q_to_fluid - q_to_ambient
-            return rho_cp * m.dT_p_dt[t, x] == (
-                rho_cp * alpha_p * m.d2T_p_dx2[t, x]
-                + heat_input_volumetric
-                - heat_to_fluid
-                - heat_loss_volumetric
-            )
-
-        else:
-            # For extended section (L < x <= L_extended): no heat input
-            heat_to_fluid = (
-                m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
-            )
-            D_outer = m.D + 2 * m.d
-            heat_loss_volumetric = (
-                m.h_ext
-                * 4.0
-                * D_outer
-                * (m.T_p[t, x] - m.T_ambient)
-                / (D_outer**2 - m.D**2)
-            )
-            if m._alpha_p is not None:
-                alpha_p = m._alpha_p
-            else:
-                alpha_p = m.k_p / rho_cp
-
-            return rho_cp * m.dT_p_dt[t, x] == (
-                rho_cp * alpha_p * m.d2T_p_dx2[t, x]
-                - heat_to_fluid
-                - heat_loss_volumetric
-            )
-
-    # Initial conditions
-    # Get sorted x values for array indexing
-    x_vals = sorted(model.x)
-
-    @model.Constraint(model.x)
-    def fluid_initial_condition(m, x):
-        if x == 0:
-            return Constraint.Skip
-        # Handle float or array initial condition
-        if np.isscalar(m.T_f_initial):
-            T_0 = m.T_f_initial
-        else:
-            idx = x_vals.index(x)
-            T_0 = m.T_f_initial[idx]
-        return m.T_f[0, x] == T_0
-
-    @model.Constraint(model.x)
-    def wall_initial_condition(m, x):
-        # Handle float or array initial condition
-        if np.isscalar(m.T_p_initial):
-            T_0 = m.T_p_initial
-        else:
-            idx = x_vals.index(x)
-            T_0 = m.T_p_initial[idx]
-        return m.T_p[0, x] == T_0
-
-    # Inlet boundary condition for fluid
-    @model.Constraint(model.t)
-    def inlet_bc(m, t):
-        return m.T_f[t, 0] == m.T_inlet[t]
-
-    # Dummy objective (required by Pyomo)
-    model.obj = Objective(expr=1)
-
-    return model
-
-
-def solve_model(
-    model, n_x=110, n_t=50, max_iter=1000, tol=1e-6, print_level=5, tee=True
-):
-    """
-    Discretize and solve the PDE model using finite differences
-
-    Parameters:
-    -----------
-    model : pyomo.ConcreteModel
-        The Pyomo model created by create_collector_model()
-    n_x : int, default=110
-        Number of finite elements for spatial discretization
-    n_t : int, default=50
-        Number of finite elements for temporal discretization
-    max_iter : int, default=1000
-        Maximum number of IPOPT solver iterations
-    tol : float, default=1e-6
-        Solver tolerance for convergence
-    print_level : int, default=5
-        IPOPT print level (0=no output, 5=detailed output)
-    tee : bool, default=True
-        Whether to display solver output to console
-
-    Returns:
-    --------
-    results : pyomo solver results object
-        Contains solver status, termination condition, and solution
-        statistics.
-
-    Notes:
-    ------
-    - Uses CENTRAL finite difference for spatial discretization
-      (2nd order accuracy)
-    - Uses BACKWARD Euler for temporal discretization (stability)
-    - Initializes time-varying parameters after discretization
-    - Provides uniform initial temperature guess for all variables
-    """
-
-    # Apply finite difference discretization
-    # Use CENTRAL difference for spatial discretization
-    # (upwind stabilization is added via artificial diffusion in fluid PDE)
-    TransformationFactory("dae.finite_difference").apply_to(
-        model, nfe=n_x, scheme="CENTRAL", wrt=model.x
-    )
-
-    # Temporal discretization (backward Euler for stability)
-    TransformationFactory("dae.finite_difference").apply_to(
-        model, nfe=n_t, scheme="BACKWARD", wrt=model.t
-    )
-
-    # Set grid spacing for upwind stabilization
-    x_vals_sorted = sorted(model.x)
-    model.dx.set_value(x_vals_sorted[1] - x_vals_sorted[0])
-
-    # Outlet boundary conditions (zero gradient)
-    @model.Constraint(model.t)
-    def fluid_outlet_bc(m, t):
-        if t == 0:  # Skip initial time
-            return Constraint.Skip
-        x_vals = sorted(m.x)
-        x_outlet = x_vals[-1]
-        x_before = x_vals[-2]
-        return m.T_f[t, x_outlet] == m.T_f[t, x_before]
-
-    @model.Constraint(model.t)
-    def wall_outlet_bc(m, t):
-        if t == 0:  # Skip initial time
-            return Constraint.Skip
-        x_vals = sorted(m.x)
-        x_outlet = x_vals[-1]
-        x_before = x_vals[-2]
-        return m.T_p[t, x_outlet] == m.T_p[t, x_before]
-
-    # Pipe wall inlet BC: zero gradient using grid values
-    x_vals_sorted = sorted(model.x)
-    x_first = x_vals_sorted[1]
-
-    @model.Constraint(model.t)
-    def wall_inlet_bc(m, t):
-        if t == 0:
-            return Constraint.Skip
-        return m.T_p[t, 0] == m.T_p[t, x_first]
-
-    print(
-        f"Discretized with {len(model.x)} x points and {len(model.t)} t points"
-    )
-
-    # Initialize time-varying parameters after discretization
-    for t in model.t:
-        model.m_dot[t].set_value(model.mass_flow_rate_func(t))
-        model.I[t].set_value(model.irradiance_func(t))
-        model.T_inlet[t].set_value(model.T_inlet_func(t))
-
-        # Note: h_int was already calculated in create_collector_model using
-        # Dittus-Boelter correlation. Velocity v(t,x) is computed as an
-        # Expression from m_dot(t) and rho_f(t,x) to conserve mass.
-
-    # Provide good initial guess for temperature fields
-    for t in model.t:
-        for x in model.x:
-            if t == 0:
-                T_guess = ZERO_C + 50.0
-            else:
-                T_guess = ZERO_C + 50.0
-            model.T_f[t, x].set_value(T_guess)
-            model.T_p[t, x].set_value(T_guess)
-
-    # Configure solver with simpler options
-    solver = SolverFactory("ipopt")
-    solver.options["max_iter"] = max_iter
-    solver.options["tol"] = tol
-    solver.options["print_level"] = print_level
-
-    print("Solving with IPOPT...")
-    results = solver.solve(model, tee=tee)
-
-    return results
 
 
 def compute_steady_state_initial_conditions(
@@ -1005,18 +696,19 @@ def run_simulation(
         Function I(t) returning solar irradiance [W/m²].
     T_inlet_func : callable, optional
         Function T_inlet(t) returning inlet temperature [K].
-    T_f_initial : float or array-like, optional
+    T_f_initial : float, array-like, or callable, optional
         Initial fluid temperature [K]. Can be:
         - float: uniform temperature for all x
         - array: temperature at each x point (after discretization)
-        - None: use steady-state (if initial_steady_state=True) or defaults
-    T_p_initial : float or array-like, optional
+        - callable: function f(x) evaluated at each grid point
+        - None: use steady-state (if initial_steady_state=True)
+    T_p_initial : float, array-like, or callable, optional
         Initial pipe wall temperature [K]. Same format as T_f_initial.
     initial_steady_state : bool, default=False
-        If True and T_f_initial/T_p_initial are None, compute steady-state
-        initial conditions by evaluating input functions at t=0 and solving
-        a steady-state model. This ensures the simulation starts from a
-        physically meaningful equilibrium state.
+        If True, compute steady-state initial conditions by evaluating input
+        functions at t=0 and solving a steady-state model. Takes precedence
+        over T_f_initial/T_p_initial; any explicit IC arguments are ignored.
+        Use initial_steady_state=False to provide explicit ICs.
     n_x : int, default=110
         Number of spatial finite elements (only used on first call).
     n_t : int, default=50
@@ -1100,14 +792,9 @@ def run_simulation(
         # First run: Set up constraints, discretize, and solve
         # =====================================================================
 
-        # Store initial conditions as mutable Params (will be created after
-        # discretization when we know the x points)
-        model._T_f_initial_value = T_f_initial
-        model._T_p_initial_value = T_p_initial
-
         # Add PDE constraints (but NOT initial conditions yet - we'll add
         # those after discretization with mutable Params)
-        _add_pde_constraints_no_ic(model)
+        add_pde_constraints(model)
 
         # Apply finite difference discretization
         TransformationFactory("dae.finite_difference").apply_to(
@@ -1123,6 +810,14 @@ def run_simulation(
 
         # Set grid spacing for upwind stabilization
         model.dx.set_value(x_vals[1] - x_vals[0])
+
+        # Evaluate callable initial conditions at grid points
+        if callable(T_f_initial):
+            T_f_initial = np.array([T_f_initial(x) for x in x_vals])
+        if callable(T_p_initial):
+            T_p_initial = np.array([T_p_initial(x) for x in x_vals])
+        model._T_f_initial_value = T_f_initial
+        model._T_p_initial_value = T_p_initial
 
         # Create mutable Params for initial conditions
         def _init_T_f(m, x):
@@ -1201,6 +896,12 @@ def run_simulation(
 
         x_vals = model._x_vals
 
+        # Evaluate callable initial conditions at grid points
+        if callable(T_f_initial):
+            T_f_initial = np.array([T_f_initial(x) for x in x_vals])
+        if callable(T_p_initial):
+            T_p_initial = np.array([T_p_initial(x) for x in x_vals])
+
         # Update initial condition Params if new values provided
         if T_f_initial is not None:
             for i, x in enumerate(x_vals):
@@ -1253,12 +954,13 @@ def run_simulation(
     return results
 
 
-def _add_pde_constraints_no_ic(model):
+def add_pde_constraints(model):
     """
-    Add PDE constraints without initial conditions.
+    Add PDE constraints and inlet boundary condition.
 
-    This is a helper for run_simulation() which adds initial conditions
-    separately using mutable Params after discretization.
+    Adds fluid and wall PDE constraints and the inlet boundary condition.
+    Initial conditions are added separately by run_simulation() after
+    discretization, using mutable Params to allow updating between runs.
     """
 
     # Fluid temperature PDE constraint
@@ -1353,7 +1055,7 @@ def get_final_temperatures(model):
     Parameters
     ----------
     model : pyomo.ConcreteModel
-        A solved model (after run_simulation or solve_model).
+        A solved model (after run_simulation).
 
     Returns
     -------
@@ -1390,7 +1092,7 @@ def create_collector_model_steady_state(
     T_inlet=ZERO_C + 200.0,
     T_ref=ZERO_C + 300.0,
     T_ambient=ZERO_C + 25.0,
-    D=PIPE_DIAMETER,
+    D=PIPE_DIAMETER_INT,
     d=PIPE_WALL_THICKNESS,
     h_ext=HEAT_TRANSFER_COEFF_EXT,
     concentration_factor=CONCENTRATION_FACTOR,
@@ -1651,10 +1353,13 @@ def add_steady_state_constraints(model):
     # Pipe wall temperature ODE constraint (steady-state energy balance)
     @model.Constraint(model.x)
     def wall_ode_constraint(m, x):
+        if x == 0:  # Skip inlet (boundary condition applies there)
+            return Constraint.Skip
+
         # Density * specific heat for pipe wall
         rho_cp = m.rho_p * m.cp_p
 
-        # For nominal physical pipe (0 <= x <= L): include heat input
+        # For nominal physical pipe (0 < x <= L): include heat input
         if x <= m.L:
             # Solar heat input: q_eff = I * c * ε / 2 [W/m²]
             q_eff = m.I * m.c * m.epsilon / 2.0
@@ -1759,12 +1464,15 @@ def solve_steady_state_model(
     x_outlet = x_vals[-1]
     x_before = x_vals[-2]
 
+    x_first = x_vals[1]
+
     model.fluid_outlet_bc = Constraint(
         expr=model.T_f[x_outlet] == model.T_f[x_before]
     )
     model.wall_outlet_bc = Constraint(
         expr=model.T_p[x_outlet] == model.T_p[x_before]
     )
+    model.wall_inlet_bc = Constraint(expr=model.T_p[0] == model.T_p[x_first])
 
     print(f"Discretized with {len(model.x)} spatial points")
 

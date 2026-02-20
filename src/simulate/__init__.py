@@ -72,7 +72,7 @@ from simulate.core import (
 from simulate.results import SimulationResult
 
 # Input signals
-from simulate.inputs import (
+from simulate.input_funcs import (
     ConstantInput,
     StepInput,
     RampInput,
