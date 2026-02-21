@@ -18,6 +18,7 @@ system:
       heat_transfer_coeff_ext: 0.0  # ambient losses
       axial_dispersion_coeff: 1.0e-10  # axial heat diffusion
       pipe_wall_thermal_diffusivity: 1.0e-10 # heat diffusion in pipe wall
+      artificial_diffusion: false
 
 simulation:
   n_x: 330

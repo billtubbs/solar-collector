@@ -141,6 +141,7 @@ def create_collector_model(
     constant_thermal_conductivity=True,
     constant_specific_heat=True,
     constant_heat_transfer_coeff=True,
+    artificial_diffusion=True,
 ):
     """
     Create Pyomo model for pipe flow heat transport PDE with fluid and wall.
@@ -230,6 +231,13 @@ def create_collector_model(
         when constant_heat_transfer_coeff=True. If None, uses the value from
         mass_flow_rate_func(0.0). This is important when input functions are
         set later via run_simulation() rather than at model creation time.
+    artificial_diffusion : bool, default=True
+        If True, add upwind artificial diffusion v*dx/2 to D_ax in the fluid
+        PDE, making D_eff = D_ax + v*dx/2. This is equivalent to first-order
+        upwind differencing and suppresses oscillations caused by central
+        differencing at high cell Péclet numbers (Pe_cell = v*dx/D_ax >> 2).
+        If False, use D_eff = D_ax (physically correct but may oscillate on
+        coarse grids or at high flow velocities).
 
     Returns
     -------
@@ -255,6 +263,7 @@ def create_collector_model(
     model.constant_viscosity = constant_viscosity
     model.constant_thermal_conductivity = constant_thermal_conductivity
     model.constant_specific_heat = constant_specific_heat
+    model._artificial_diffusion = artificial_diffusion
 
     # Extend domain by 10% beyond nominal length
     L_extended = L * 1.1
@@ -973,7 +982,8 @@ def add_pde_constraints(model):
 
         heat_to_fluid = m.h_int[t, x] * 4.0 * (m.T_p[t, x] - m.T_f[t, x]) / m.D
         rho_cp = m.rho_f[t, x] * m.cp_f[t, x]
-        D_eff = m.D_ax + m.v[t, x] * m.dx / 2
+        upwind_term = m.v[t, x] * m.dx / 2 if m._artificial_diffusion else 0.0
+        D_eff = m.D_ax + upwind_term
         return (
             rho_cp * m.dT_f_dt[t, x] + rho_cp * m.v[t, x] * m.dT_f_dx[t, x]
             == rho_cp * D_eff * m.d2T_f_dx2[t, x] + heat_to_fluid
@@ -1103,6 +1113,7 @@ def create_collector_model_steady_state(
     constant_thermal_conductivity=True,
     constant_specific_heat=True,
     constant_heat_transfer_coeff=True,
+    artificial_diffusion=True,
 ):
     """
     Create a Pyomo model for steady-state solar collector heat transfer.
@@ -1152,6 +1163,10 @@ def create_collector_model_steady_state(
         If True, use constant specific heat at T_ref.
     constant_heat_transfer_coeff : bool, default=True
         If True, use constant h_int calculated at T_ref.
+    artificial_diffusion : bool, default=True
+        If True, add upwind artificial diffusion v*dx/2 to D_ax in the fluid
+        PDE, making D_eff = D_ax + v*dx/2. Should match the setting used in
+        the dynamic model when comparing steady-state and transient solutions.
 
     Returns
     -------
@@ -1171,6 +1186,7 @@ def create_collector_model_steady_state(
     model.constant_thermal_conductivity = constant_thermal_conductivity
     model.constant_specific_heat = constant_specific_heat
     model.constant_heat_transfer_coeff = constant_heat_transfer_coeff
+    model._artificial_diffusion = artificial_diffusion
 
     # Extended spatial domain for outlet boundary condition stability
     L_extended = L * 1.1
@@ -1342,9 +1358,10 @@ def add_steady_state_constraints(model):
 
         # Steady-state fluid energy balance:
         # ρ·cp·v·∂T_f/∂x = ρ·cp·D_eff·∂²T_f/∂x² + heat_to_fluid
-        # D_eff = D_ax + v*dx/2 adds upwind artificial diffusion
+        # D_eff = D_ax + v*dx/2 adds upwind artificial diffusion (optional)
         rho_cp = m.rho_f[x] * m.cp_f[x]
-        D_eff = m.D_ax + m.v[x] * m.dx / 2
+        upwind_term = m.v[x] * m.dx / 2 if m._artificial_diffusion else 0.0
+        D_eff = m.D_ax + upwind_term
         return (
             rho_cp * m.v[x] * m.dT_f_dx[x]
             == rho_cp * D_eff * m.d2T_f_dx2[x] + heat_to_fluid
